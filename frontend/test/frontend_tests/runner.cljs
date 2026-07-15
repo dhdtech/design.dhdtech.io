@@ -86,6 +86,7 @@
    [frontend-tests.render-wasm.text-editor-apply-styles-test]
    [frontend-tests.render-wasm.text-editor-caret-color-test]
    [frontend-tests.render-wasm.text-paste-test]
+   [frontend-tests.render-wasm.texts-test]
    [frontend-tests.router-test]
    [frontend-tests.svg-fills-test]
    [frontend-tests.svg-filters-test]
@@ -107,6 +108,7 @@
    [frontend-tests.ui.comment-input-ime-test]
    [frontend-tests.ui.comments-clustering-test]
    [frontend-tests.ui.comments-position-modifier-test]
+   [frontend-tests.ui.css-cursors-test]
    [frontend-tests.ui.ds-controls-numeric-input-test]
    [frontend-tests.ui.gradient-handlers-test]
    [frontend-tests.ui.history-test]
@@ -120,6 +122,7 @@
    [frontend-tests.ui.sidebar-scroll-test]
    [frontend-tests.ui.stroke-menu-test]
    [frontend-tests.ui.text-attrs-multiple-test]
+   [frontend-tests.ui.text-options-test]
    [frontend-tests.util-clipboard-test]
    [frontend-tests.util-object-test]
    [frontend-tests.util-queue-test]
@@ -226,6 +229,7 @@
    'frontend-tests.render-wasm.text-editor-apply-styles-test
    'frontend-tests.render-wasm.text-editor-caret-color-test
    'frontend-tests.render-wasm.text-paste-test
+   'frontend-tests.render-wasm.texts-test
    'frontend-tests.router-test
    'frontend-tests.svg-fills-test
    'frontend-tests.svg-filters-test
@@ -246,6 +250,7 @@
    'frontend-tests.ui.comment-input-ime-test
    'frontend-tests.ui.comments-clustering-test
    'frontend-tests.ui.comments-position-modifier-test
+   'frontend-tests.ui.css-cursors-test
    'frontend-tests.ui.ds-controls-numeric-input-test
    'frontend-tests.ui.gradient-handlers-test
    'frontend-tests.ui.history-test
@@ -261,6 +266,7 @@
    'frontend-tests.ui.sidebar-scroll-test
    'frontend-tests.ui.stroke-menu-test
    'frontend-tests.ui.text-attrs-multiple-test
+   'frontend-tests.ui.text-options-test
    'frontend-tests.util-clipboard-test
    'frontend-tests.util-object-test
    'frontend-tests.util-queue-test
