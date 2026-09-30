@@ -131,6 +131,7 @@
    [frontend-tests.util-webapi-test]
    [frontend-tests.util-zip-test]
    [frontend-tests.util.dom.dnd-test]
+   [frontend-tests.worker-index-test]
    [frontend-tests.worker-snap-test]
    [goog.object :as gobj]))
 
@@ -273,6 +274,7 @@
    'frontend-tests.util-webapi-test
    'frontend-tests.util.dom.dnd-test
    'frontend-tests.util-zip-test
+   'frontend-tests.worker-index-test
    'frontend-tests.worker-snap-test])
 
 (assert (every? find-ns-obj test-namespaces)
