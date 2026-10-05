@@ -4,7 +4,7 @@ use super::text_vertical::{
 };
 use crate::globals::get_resources;
 use crate::math::Point;
-use crate::shapes::japanese::{classify, shed_pair_aki, JapaneseClass};
+use crate::shapes::japanese::{classify, is_japanese_text_char, shed_pair_aki, JapaneseClass};
 use crate::shapes::{kinsoku, merge_fills};
 use crate::utils::{get_fallback_fonts, get_font_collection};
 use skia_safe::{
@@ -33,7 +33,12 @@ pub(crate) fn layout_span_texts(paragraph: &Paragraph) -> (Vec<String>, kinsoku:
             .children()
             .iter()
             .any(|span| span.letter_spacing != 0.0);
-    if !has_letter_spacing {
+    // Text without Japanese characters or ruby keeps plain Skia layout.
+    let uses_japanese_layout = paragraph.children().iter().any(TextSpan::has_ruby)
+        || texts
+            .iter()
+            .any(|text| text.chars().any(is_japanese_text_char));
+    if uses_japanese_layout && !has_letter_spacing {
         let ruby_breaks: Vec<Option<Vec<usize>>> = paragraph
             .children()
             .iter()
@@ -48,11 +53,19 @@ pub(crate) fn layout_span_texts(paragraph: &Paragraph) -> (Vec<String>, kinsoku:
     (texts, kinsoku::OffsetMap::default())
 }
 
+/// Curly quotes are full-width in some fonts and proportional in others
+/// (JLREQ lists them both as brackets and as Western), so their built-in aki
+/// is unknown.
+fn is_curly_quote(ch: char) -> bool {
+    matches!(ch, '‘' | '’' | '“' | '”')
+}
+
 /// Char indices, per span of the layout `texts`, of the characters whose
 /// advance loses a half-em to the punctuation aki rules of `shed_pair_aki`:
 /// a closing mark sheds its trailing aki, and the character before an
 /// opening bracket gives up the bracket's leading aki. Inserted word joiners
-/// are transparent. Spans with `palt` already set punctuation proportionally.
+/// are transparent. Spans with `palt` already set punctuation proportionally,
+/// and curly quotes never shed.
 pub(crate) fn horizontal_aki_sheds(paragraph: &Paragraph, texts: &[String]) -> Vec<Vec<usize>> {
     let mut sheds: Vec<Vec<usize>> = vec![Vec::new(); texts.len()];
     // (span, char index in the span text, class) of every real character.
@@ -67,7 +80,10 @@ pub(crate) fn horizontal_aki_sheds(paragraph: &Paragraph, texts: &[String]) -> V
             text.chars()
                 .enumerate()
                 .filter(|(_, ch)| *ch != kinsoku::WORD_JOINER)
-                .map(move |(index, ch)| (span, index, (!proportional).then(|| classify(ch))))
+                .map(move |(index, ch)| {
+                    let class = (!proportional && !is_curly_quote(ch)).then(|| classify(ch));
+                    (span, index, class)
+                })
         })
         .collect();
     for pair in chars.windows(2) {
@@ -1241,6 +1257,42 @@ mod tests {
     }
 
     #[test]
+    fn layout_span_texts_leaves_text_without_japanese_unchanged() {
+        init_state();
+        let paragraph = make_paragraph(vec![make_span("hello world foo", 0.0)], 0.0);
+        let (texts, map) = paragraph.layout_span_texts();
+        assert_eq!(texts, vec!["hello world foo".to_string()]);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn layout_span_texts_sets_western_spaces_inside_japanese_text() {
+        init_state();
+        let paragraph = make_paragraph(vec![make_span("日本 hello world", 0.0)], 0.0);
+        let (texts, _) = paragraph.layout_span_texts();
+        assert_eq!(
+            texts,
+            vec![format!(
+                "日本{}hello{}world",
+                kinsoku::WESTERN_WORD_SPACE,
+                kinsoku::WESTERN_WORD_SPACE
+            )]
+        );
+    }
+
+    #[test]
+    fn layout_span_texts_keeps_ruby_atomic_without_japanese_text() {
+        init_state();
+        let mut group = make_span("ab", 0.0);
+        group.ruby = "x".to_string();
+        let paragraph = make_paragraph(vec![group], 0.0);
+        assert_eq!(
+            paragraph.layout_span_texts().0,
+            vec!["a\u{2060}b".to_string()]
+        );
+    }
+
+    #[test]
     fn horizontal_ruby_is_atomic() {
         init_state();
         let mut group = make_span("日本", 0.0);
@@ -1393,6 +1445,20 @@ mod tests {
             vec![vec![1, 4], vec![0]],
             "。 before 」, 、 before 「 across spans, and 「 before 「"
         );
+    }
+
+    #[test]
+    fn horizontal_aki_sheds_skip_curly_quotes() {
+        init_state();
+        for text in ["“‘Hi’”", "あ“い”。", "あ‘い’、"] {
+            let texts = vec![text.to_string()];
+            let paragraph = make_paragraph(vec![make_span(text, 0.0)], 0.0);
+            assert_eq!(
+                horizontal_aki_sheds(&paragraph, &texts),
+                vec![Vec::<usize>::new()],
+                "no aki shed in {text:?}"
+            );
+        }
     }
 
     #[test]

@@ -23,9 +23,12 @@
         class (when is-code (:$id node))
         ruby  (jl/visible-ruby node)]
     (if (some? ruby)
-      [:ruby.ruby-node {:style (sts/generate-ruby-container-styles node)}
+      [:ruby.ruby-node {:style (sts/generate-ruby-container-styles node)
+                        :class (when is-code (dm/str class "-ruby"))}
        [:span.text-node {:style style :class class} text]
-       [:rt {:style (sts/generate-ruby-styles shape node)} ruby]]
+       [:rt {:style (sts/generate-ruby-styles shape node)
+             :class (when is-code (dm/str class "-rt"))}
+        ruby]]
       [:span.text-node {:style style :class class}
        (if (= text "") "\u00A0" text)])))
 

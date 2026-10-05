@@ -20,6 +20,7 @@
    [app.common.types.modifiers :as ctm]
    [app.common.types.shape.layout :as ctl]
    [app.common.types.text :as txt]
+   [app.common.types.text.japanese-layout :as jl]
    [app.common.uuid :as uuid]
    [app.main.data.changes :as dch]
    [app.main.data.helpers :as dsh]
@@ -563,10 +564,41 @@
                     (<= (-> node meta :end) end))))
         #(d/patch-object % attrs))))
 
-(defn- update-text-range-attrs
+(defn- overlapping-text-nodes
+  "Text nodes of a range-decorated content with characters in [start, end)."
+  [content start end]
+  (->> (txt/node-seq txt/is-text-node? content)
+       (filter (fn [node]
+                 (let [{node-start :start node-end :end} (meta node)]
+                   (and (< node-start end) (< start node-end)))))))
+
+(defn- annotated-span-bounds
+  "The range [start, end) widened to cover every ruby or warichu span it
+   cuts, so a reading or note is never split between two spans."
+  [content start end]
+  (->> (overlapping-text-nodes content start end)
+       (filter jl/annotated-span?)
+       (reduce (fn [[start end] node]
+                 (let [{node-start :start node-end :end} (meta node)]
+                   [(min start node-start) (max end node-end)]))
+               [start end])))
+
+(defn single-span-range?
+  "True when the characters [start, end) of `content`, widened to whole ruby
+   and warichu spans, all belong to one text span."
+  [content start end]
+  (or (nil? content)
+      (let [content     (decorate-range-info content)
+            [start end] (annotated-span-bounds content start end)]
+        (<= (count (overlapping-text-nodes content start end)) 1))))
+
+(defn update-text-range-attrs
+  "Applies `attrs` to the characters [start, end) of a text shape. A range
+   that cuts a ruby or warichu span covers the whole span."
   [shape start end attrs]
-  (let [new-content (-> (:content shape)
-                        (decorate-range-info)
+  (let [content     (decorate-range-info (:content shape))
+        [start end] (annotated-span-bounds content start end)
+        new-content (-> content
                         (split-content-at start)
                         (split-content-at end)
                         (update-content-range start end attrs))]

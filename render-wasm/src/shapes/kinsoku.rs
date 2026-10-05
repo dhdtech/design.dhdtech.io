@@ -18,8 +18,10 @@ pub const WORD_JOINER: char = '\u{2060}';
 pub const JAPANESE_WESTERN_SPACE: char = '\u{2005}';
 /// Unicode THREE-PER-EM SPACE, used for Western word spaces.
 pub const WESTERN_WORD_SPACE: char = '\u{2004}';
+/// Joins emoji into one grapheme cluster.
+const ZERO_WIDTH_JOINER: char = '\u{200D}';
 
-use super::japanese::{classify, pair_rule};
+use super::japanese::{classify, extends_grapheme, pair_rule};
 
 pub fn forbidden_at_line_start(c: char) -> bool {
     classify(c).forbids_line_start()
@@ -66,17 +68,20 @@ impl OffsetMap {
 
 /// Applies the horizontal Japanese layout-text transform: inserts WORD
 /// JOINER wherever a break would violate kinsoku, inserts a quarter-em space
-/// at Japanese↔Western boundaries, and sets breakable ASCII spaces to one
-/// third em. Span boundaries are transparent. `ruby_breaks[span] ==
-/// Some(boundaries)` forbids breaks at every internal scalar boundary of that
-/// span except those UTF-16 offsets. Returns `None` when nothing changes.
+/// between Japanese letters and Western letters or digits, and sets
+/// breakable ASCII spaces to one third em. Span boundaries are transparent;
+/// grapheme clusters are not, so nothing lands inside one. `ruby_breaks[span]
+/// == Some(boundaries)` forbids breaks at every internal scalar boundary of
+/// that span except those UTF-16 offsets. Returns `None` when nothing changes.
 pub fn apply_to_span_texts_with_ruby_breaks(
     span_texts: &[String],
     ruby_breaks: &[Option<Vec<usize>>],
 ) -> Option<(Vec<String>, OffsetMap)> {
     let mut inserted: Vec<usize> = Vec::new();
     let mut out: Vec<String> = Vec::with_capacity(span_texts.len());
+    // Base character of the previous grapheme cluster.
     let mut prev: Option<char> = None;
+    let mut after_zwj = false;
     let mut changed = false;
     // Running position in shifted UTF-16 coordinates.
     let mut shifted_pos: usize = 0;
@@ -85,6 +90,13 @@ pub fn apply_to_span_texts_with_ruby_breaks(
         let mut shifted_text = String::with_capacity(text.len() + 4);
         let mut local_utf16 = 0usize;
         for c in text.chars() {
+            if after_zwj || extends_grapheme(c) {
+                shifted_text.push(c);
+                shifted_pos += c.len_utf16();
+                local_utf16 += c.len_utf16();
+                after_zwj = c == ZERO_WIDTH_JOINER;
+                continue;
+            }
             let ruby_forbids_break = local_utf16 > 0
                 && ruby_breaks
                     .get(span_index)
@@ -100,12 +112,7 @@ pub fn apply_to_span_texts_with_ruby_breaks(
                 inserted.push(shifted_pos);
                 shifted_pos += 1;
                 changed = true;
-            } else if prev.is_some_and(|p| {
-                let before = classify(p);
-                let after = classify(c);
-                (before.is_japanese_letter() && after.is_western_run())
-                    || (before.is_western_run() && after.is_japanese_letter())
-            }) {
+            } else if prev.is_some_and(|p| is_japanese_western_boundary(p, c)) {
                 shifted_text.push(JAPANESE_WESTERN_SPACE);
                 inserted.push(shifted_pos);
                 shifted_pos += 1;
@@ -129,6 +136,17 @@ pub fn apply_to_span_texts_with_ruby_breaks(
         return None;
     }
     Some((out, OffsetMap { inserted }))
+}
+
+/// JLREQ §3.2.6 boundary between a Japanese letter and a Western letter or
+/// digit. Western symbols, brackets and emoji set solid.
+fn is_japanese_western_boundary(before: char, after: char) -> bool {
+    let before_class = classify(before);
+    let after_class = classify(after);
+    (before_class.is_japanese_letter() && after_class.is_western_run() && after.is_alphanumeric())
+        || (before_class.is_western_run()
+            && before.is_alphanumeric()
+            && after_class.is_japanese_letter())
 }
 
 #[cfg(test)]
@@ -251,6 +269,47 @@ mod tests {
             ]
         );
         assert_eq!(map.inserted, vec![2]);
+    }
+
+    #[test]
+    fn no_insertion_inside_a_variation_sequence() {
+        assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["葛\u{E0100}城"]), &[]).is_none());
+    }
+
+    #[test]
+    fn no_insertion_before_halfwidth_voiced_marks() {
+        assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["ｶﾞｷﾞ"]), &[]).is_none());
+    }
+
+    #[test]
+    fn no_insertion_inside_an_emoji_zwj_sequence() {
+        assert!(
+            apply_to_span_texts_with_ruby_breaks(&strings(&["👩\u{200D}💻\u{200D}あ"]), &[])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn grapheme_extenders_keep_the_base_as_previous_character() {
+        let (texts, _) = apply(&["葛\u{E0100}Penpot"]);
+        assert_eq!(
+            texts,
+            vec![format!("葛\u{E0100}{JAPANESE_WESTERN_SPACE}Penpot")]
+        );
+    }
+
+    #[test]
+    fn ruby_joiners_stay_outside_grapheme_clusters() {
+        let texts = strings(&["葛\u{E0100}城"]);
+        let (shifted, _) = apply_to_span_texts_with_ruby_breaks(&texts, &[Some(Vec::new())])
+            .expect("expected a ruby joiner");
+        assert_eq!(shifted, vec!["葛\u{E0100}\u{2060}城".to_string()]);
+    }
+
+    #[test]
+    fn no_japanese_western_space_beside_symbols() {
+        assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["あ😀い"]), &[]).is_none());
+        assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["(注)あ"]), &[]).is_none());
     }
 
     #[test]

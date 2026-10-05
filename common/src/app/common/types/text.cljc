@@ -122,6 +122,11 @@
    text-transform-attrs
    text-fills))
 
+(def text-node-style-attrs
+  "Text node attrs that style characters, without the attrs the characters
+   own (ruby reading, warichu)."
+  (vec (remove (set jl/text-content-attrs) text-node-attrs)))
+
 (def text-span-attrs
   "Inline text span attrs. Line-height is paragraph-level in the DOM editor;
    it may still be stored redundantly on span nodes."

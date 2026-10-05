@@ -241,13 +241,20 @@
        :always
        (add-japanese-text-styles! data)))))
 
+(defn- ruby-font-size
+  "Pixel size of a span's ruby text. Paragraphs set font-size 0, so a
+   relative size would resolve to nothing."
+  [data]
+  (let [font-size (:font-size data)
+        font-size (js/parseFloat (if (and (string? font-size) (pos? (alength font-size)))
+                                   font-size
+                                   (:font-size txt/default-typography)))]
+    (str (* font-size (jl/ruby-font-scale (:ruby-size data))) "px")))
+
 (defn generate-ruby-styles
   [shape data]
   (-> (generate-text-styles shape data)
-      (obj/set! "fontSize" (case (:ruby-size data)
-                             "third" "33.333333%"
-                             "quarter" "25%"
-                             "50%"))
+      (obj/set! "fontSize" (ruby-font-size data))
       (obj/set! "lineHeight" "1")
       (obj/set! "textDecoration" "none")
       (obj/unset! "textCombineUpright")))

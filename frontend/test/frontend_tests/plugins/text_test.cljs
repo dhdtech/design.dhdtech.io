@@ -236,3 +236,54 @@
       (let [text-shape (.-shape range)]
         (t/is (shape/shape-proxy? text-shape))
         (t/is (= shape-id (aget text-shape "$id")))))))
+
+(def ^:private two-span-content
+  {:type "root"
+   :children [{:type "paragraph-set"
+               :children [{:type "paragraph"
+                           :children [{:text "漢" :font-weight "700"}
+                                      {:text "字" :font-weight "400"}]}]}]})
+
+(defn- capture-japanese-update
+  "Sets `property` to `value` on `target` over `content`; returns the attrs
+  sent to the update and the rejection reason, if any."
+  [target property value content]
+  (let [captured (atom {})]
+    (with-redefs [r/check-permission (constantly true)
+                  u/page-active? (constantly true)
+                  u/proxy->shape (constantly {:content content})
+                  u/not-valid (fn [_ _ reason] (swap! captured assoc :rejected reason))
+                  dwt/update-text-range
+                  (fn [_ _ _ attrs] (swap! captured assoc :attrs attrs) :update)
+                  dwt/update-attrs
+                  (fn [_ attrs] (swap! captured assoc :attrs attrs) :update)
+                  st/emit! mock/noop]
+      (unchecked-set target property value)
+      @captured)))
+
+(t/deftest text-range-ruby-across-spans-is-rejected
+  (let [range  (plugins.text/text-range-proxy plugin-id (random-uuid) (random-uuid) (random-uuid) 0 2)
+        result (capture-japanese-update range "ruby" "かんじ" two-span-content)]
+    (t/is (nil? (:attrs result)))
+    (t/is (string? (:rejected result)))))
+
+(t/deftest text-range-warichu-across-spans-is-rejected
+  (let [range  (plugins.text/text-range-proxy plugin-id (random-uuid) (random-uuid) (random-uuid) 0 2)
+        result (capture-japanese-update range "warichu" "warichu" two-span-content)]
+    (t/is (nil? (:attrs result)))))
+
+(t/deftest text-range-ruby-inside-one-span-is-applied
+  (let [range  (plugins.text/text-range-proxy plugin-id (random-uuid) (random-uuid) (random-uuid) 1 2)
+        result (capture-japanese-update range "ruby" "じ" two-span-content)]
+    (t/is (= {:ruby "じ"} (:attrs result)))))
+
+(t/deftest text-ruby-on-a-multi-span-text-is-rejected
+  (let [text   (plugins.text/add-text-props #js {:$id (random-uuid) :$page (random-uuid)} plugin-id)
+        result (capture-japanese-update text "ruby" "かんじ" two-span-content)]
+    (t/is (nil? (:attrs result)))
+    (t/is (string? (:rejected result)))))
+
+(t/deftest text-ruby-can-be-cleared-on-a-multi-span-text
+  (let [text   (plugins.text/add-text-props #js {:$id (random-uuid) :$page (random-uuid)} plugin-id)
+        result (capture-japanese-update text "ruby" "" two-span-content)]
+    (t/is (= {:ruby ""} (:attrs result)))))

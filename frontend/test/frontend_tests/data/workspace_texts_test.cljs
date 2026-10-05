@@ -650,3 +650,37 @@
   (t/testing "a non-root content (e.g. paragraph) is left alone"
     (let [node {:type "paragraph" :children []}]
       (t/is (= node (dwt/ensure-valid-text-content node))))))
+
+(defn- spans-content
+  [& spans]
+  {:type "root"
+   :children [{:type "paragraph-set"
+               :children [{:type "paragraph"
+                           :children (vec spans)}]}]})
+
+(defn- content-spans
+  [shape]
+  (txt/node-seq txt/is-text-node? (:content shape)))
+
+(t/deftest range-style-over-part-of-a-ruby-span-styles-the-whole-span
+  (let [shape  {:type :text
+                :content (spans-content {:text "あ" :font-size "14"}
+                                        {:text "漢字" :font-size "14" :ruby "かんじ"}
+                                        {:text "い" :font-size "14"})}
+        result (dwt/update-text-range-attrs shape 1 2 {:font-size "30"})]
+    (t/is (= [["あ" "14" nil] ["漢字" "30" "かんじ"] ["い" "14" nil]]
+             (mapv (juxt :text :font-size :ruby) (content-spans result))))))
+
+(t/deftest range-style-over-part-of-a-warichu-span-styles-the-whole-span
+  (let [shape  {:type :text
+                :content (spans-content {:text "本文" :font-size "14"}
+                                        {:text "割注" :font-size "14" :warichu "warichu"})}
+        result (dwt/update-text-range-attrs shape 0 3 {:font-size "30"})]
+    (t/is (= [["本文" "30" nil] ["割注" "30" "warichu"]]
+             (mapv (juxt :text :font-size :warichu) (content-spans result))))))
+
+(t/deftest single-span-range-is-false-across-span-boundaries
+  (let [content (spans-content {:text "漢" :font-weight "700"}
+                               {:text "字かな" :font-weight "400"})]
+    (t/is (true? (dwt/single-span-range? content 1 3)))
+    (t/is (false? (dwt/single-span-range? content 0 2)))))

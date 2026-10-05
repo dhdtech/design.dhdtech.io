@@ -47,6 +47,11 @@
 (def text-annotation-clearance-attrs
   [:annotation-clearance])
 
+;; Span attrs owned by the span's characters, not its style: a reading or a
+;; warichu note annotates one span and is never copied to other text.
+(def text-content-attrs
+  [:ruby :warichu])
+
 ;; Values of the span attrs above when a span does not store them.
 (def span-attr-defaults
   {:text-combine-upright "none"
@@ -93,6 +98,12 @@
                (not (str/blank? ruby))
                (not (true? (:ruby-hidden node))))
       ruby)))
+
+(defn annotated-span?
+  "True when a text node carries a ruby reading or is a warichu note."
+  [node]
+  (or (not (str/blank? (:ruby node)))
+      (= "warichu" (:warichu node))))
 
 (defn warichu-text?
   "True when a text node renders as warichu, which needs at least two

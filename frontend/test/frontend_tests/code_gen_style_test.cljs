@@ -307,3 +307,37 @@
       (is (str/includes? markup "<rt"))
       (is (str/includes? markup "漢字"))
       (is (str/includes? markup "かんじ")))))
+
+(deftest foreign-object-ruby-text-has-a-pixel-size
+  (testing "ruby text takes a pixel size from its base, since paragraphs set font-size 0"
+    (let [content (assoc-in ruby-text-content
+                            [:children 0 :children 0 :children 0 :ruby-size]
+                            "quarter")
+          text    (text-shape content)
+          markup  (rds/renderToStaticMarkup
+                   (mf/element fo-text/text-shape* #js {:shape text :grow-type :fixed}))
+          rt      (re-find #"<rt[^>]*>" markup)]
+      (is (str/includes? rt "font-size:5px")))))
+
+(deftest generated-css-styles-ruby-annotations
+  (testing "generated CSS has rules for the ruby wrapper and its annotation"
+    (let [text   (text-shape ruby-text-content)
+          markup (html/generate-markup (objects text) [text])
+          css    (css/generate-text-css text)
+          ruby-class (second (re-find #"<ruby[^>]*class=\"[^\"]*?([^\" ]+-ruby)\"" markup))
+          rt-class   (second (re-find #"<rt[^>]*class=\"([^\"]+)\"" markup))
+          rule   (fn [class]
+                   (second (re-find (re-pattern (str "\\." class " \\{([^}]*)\\}")) css)))]
+      (is (some? ruby-class))
+      (is (some? rt-class))
+      (is (re-find #"ruby-position:\s*over" (or (rule ruby-class) "")))
+      (is (re-find #"font-size:\s*10px" (or (rule rt-class) ""))))))
+
+(deftest generated-css-styles-ruby-only-on-text-nodes
+  (testing "a paragraph that stores the reading as a default gets no ruby rules"
+    (let [content (assoc-in ruby-text-content
+                            [:children 0 :children 0 :ruby]
+                            "かんじ")
+          css     (css/generate-text-css (text-shape content))]
+      (is (not (str/includes? css "paragraph-0-ruby")))
+      (is (not (str/includes? css "paragraph-0-rt"))))))

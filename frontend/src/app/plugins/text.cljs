@@ -154,6 +154,37 @@
   (attr-setter plugin-id page-id prop attr valid?
                (fn [self attrs] (dwt/update-attrs (obj/get self "$id") attrs))))
 
+(def ^:private multi-span-annotation-message
+  "A ruby reading or warichu note must cover characters of a single text span")
+
+(defn- annotating?
+  "True when setting `attr` to `value` adds a ruby reading or a warichu note."
+  [attr value]
+  (case attr
+    :ruby    (and (string? value) (not (str/blank? value)))
+    :warichu (= "warichu" value)
+    false))
+
+(defn- annotation-setter
+  "Wraps `setter` so a reading or note is only added over characters [start,
+   end) of one text span: copying it to several spans would repeat it."
+  [plugin-id prop attr start end setter]
+  (fn [self value]
+    (if (and (annotating? attr value)
+             (not (dwt/single-span-range? (-> self u/proxy->shape :content) start end)))
+      (u/not-valid plugin-id prop multi-span-annotation-message)
+      (setter self value))))
+
+(defn- range-annotation-setter
+  [plugin-id page-id id start end prop attr valid?]
+  (annotation-setter plugin-id prop attr start end
+                     (range-attr-setter plugin-id page-id id start end prop attr valid?)))
+
+(defn- shape-annotation-setter
+  [plugin-id page-id prop attr valid?]
+  (annotation-setter plugin-id prop attr 0 ##Inf
+                     (shape-attr-setter plugin-id page-id prop attr valid?)))
+
 (defn text-range-proxy?
   [range]
   (obj/type-of? range "TextRange"))
@@ -444,7 +475,7 @@
     :warichu
     {:this true
      :get (fn [self] (range-japanese-value self start end :warichu))
-     :set (range-attr-setter plugin-id page-id id start end :warichu :warichu (enum-value? warichu-re))}
+     :set (range-annotation-setter plugin-id page-id id start end :warichu :warichu (enum-value? warichu-re))}
 
     :annotationClearance
     {:this true
@@ -454,7 +485,7 @@
     :ruby
     {:this true
      :get (fn [self] (range-japanese-value self start end :ruby))
-     :set (range-attr-setter plugin-id page-id id start end :ruby :ruby optional-string?)}
+     :set (range-annotation-setter plugin-id page-id id start end :ruby :ruby optional-string?)}
 
     :rubySize
     {:this true
@@ -888,7 +919,7 @@
 
      {:name "warichu"
       :get #(-> % u/proxy->shape text-props :warichu format/format-mixed)
-      :set (shape-attr-setter plugin-id page-id :warichu :warichu (enum-value? warichu-re))}
+      :set (shape-annotation-setter plugin-id page-id :warichu :warichu (enum-value? warichu-re))}
 
      {:name "fontFeatures"
       :get #(-> % u/proxy->shape text-props :font-features format/format-mixed)
@@ -900,7 +931,7 @@
 
      {:name "ruby"
       :get #(-> % u/proxy->shape text-props :ruby format/format-mixed)
-      :set (shape-attr-setter plugin-id page-id :ruby :ruby optional-string?)}
+      :set (shape-annotation-setter plugin-id page-id :ruby :ruby optional-string?)}
 
      {:name "rubySize"
       :get #(-> % u/proxy->shape text-props :ruby-size format/format-mixed)
