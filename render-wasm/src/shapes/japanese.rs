@@ -170,6 +170,47 @@ pub fn shed_pair_aki(before: JapaneseClass, after: JapaneseClass) -> (bool, bool
     }
 }
 
+/// Which built-in half-em aki of a character goes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AkiShed {
+    /// The aki after a closing mark.
+    Trailing,
+    /// The aki before an opening bracket.
+    Leading,
+}
+
+/// Class a character takes for punctuation aki, or `None` when its built-in
+/// aki is unknown: punctuation set proportionally (`proportional`, from
+/// `palt` or `vpal` in the flow direction) and curly quotes, which are
+/// full-width in some fonts and proportional in others. A ruby base counts
+/// as simple ruby (cl-22).
+pub fn aki_class(ch: char, ruby_base: bool, proportional: bool) -> Option<JapaneseClass> {
+    if ruby_base {
+        return Some(JapaneseClass::SimpleRuby);
+    }
+    let curly_quote = matches!(ch, '‘' | '’' | '“' | '”');
+    (!proportional && !curly_quote).then(|| classify(ch))
+}
+
+/// The half-em aki that go in a run of characters classed by `aki_class`
+/// (JLREQ §3.1.4, see `shed_pair_aki`), as (character index, which aki).
+/// A character of unknown aki (`None`) sheds nothing and makes its
+/// neighbours keep theirs.
+pub fn punctuation_aki_sheds(classes: &[Option<JapaneseClass>]) -> Vec<(usize, AkiShed)> {
+    let mut sheds = Vec::new();
+    for (index, pair) in classes.windows(2).enumerate() {
+        let [Some(before), Some(after)] = *pair else {
+            continue;
+        };
+        match shed_pair_aki(before, after) {
+            (true, _) => sheds.push((index, AkiShed::Trailing)),
+            (_, true) => sheds.push((index + 1, AkiShed::Leading)),
+            _ => {}
+        }
+    }
+    sheds
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PairRule {
     /// Preferred extra spacing between the two character frames, in em.
@@ -538,6 +579,44 @@ fn is_ideographic_symbol(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aki_class_leaves_out_curly_quotes_and_proportional_punctuation() {
+        assert_eq!(aki_class('“', false, false), None);
+        assert_eq!(aki_class('」', false, true), None);
+        assert_eq!(
+            aki_class('」', false, false),
+            Some(JapaneseClass::ClosingBracket)
+        );
+        assert_eq!(
+            aki_class('」', true, false),
+            Some(JapaneseClass::SimpleRuby)
+        );
+    }
+
+    #[test]
+    fn punctuation_aki_sheds_the_trailing_aki_of_a_closing_mark() {
+        use JapaneseClass::*;
+        let classes = [Some(ClosingBracket), Some(OpeningBracket)];
+        assert_eq!(
+            punctuation_aki_sheds(&classes),
+            vec![(0, AkiShed::Trailing)]
+        );
+    }
+
+    #[test]
+    fn punctuation_aki_sheds_the_leading_aki_of_a_second_opening_bracket() {
+        use JapaneseClass::*;
+        let classes = [Some(OpeningBracket), Some(OpeningBracket)];
+        assert_eq!(punctuation_aki_sheds(&classes), vec![(1, AkiShed::Leading)]);
+    }
+
+    #[test]
+    fn punctuation_aki_sheds_nothing_next_to_an_unknown_aki() {
+        use JapaneseClass::*;
+        let classes = [Some(ClosingBracket), None, Some(OpeningBracket)];
+        assert!(punctuation_aki_sheds(&classes).is_empty());
+    }
 
     #[test]
     fn class_model_contains_all_thirty_jlreq_classes_in_order() {

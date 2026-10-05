@@ -4,7 +4,8 @@
 // burasage, oidashi).
 
 use crate::shapes::japanese::{
-    break_allowed_between, classify, pair_rule, shed_pair_aki, JapaneseClass,
+    aki_class, break_allowed_between, classify, pair_rule, punctuation_aki_sheds, AkiShed,
+    JapaneseClass,
 };
 use crate::shapes::kinsoku::{forbidden_at_line_end, forbidden_at_line_start};
 use crate::shapes::TextAlign;
@@ -347,33 +348,33 @@ pub(super) fn flow_classes(cells: &[FlowCell], ruby_spans: &[bool]) -> Vec<Optio
 
 /// JLREQ punctuation and cl-30 adjacency. Full-width fonts include a half-em
 /// aki in punctuation advances. Ordinary text keeps it; at the internal
-/// boundaries of §3.1.4 one half-em goes (see `shed_pair_aki`), and middle
-/// dots keep their quarter-em sides.
-pub(super) fn shed_punctuation_aki(cells: &mut [FlowCell], classes: &[Option<JapaneseClass>]) {
-    for (i, flow) in cells.iter_mut().enumerate() {
-        let Some(ch) = flow.ch else {
-            continue;
-        };
-        let class = classify(ch);
-        let closing = class.is_trailing_aki_punctuation();
-        let opening = class == JapaneseClass::OpeningBracket;
-        let shed = if closing {
-            classes
-                .get(i + 1)
-                .copied()
-                .flatten()
-                .is_some_and(|next| shed_pair_aki(class, next).0)
-        } else if opening {
-            i.checked_sub(1)
-                .and_then(|previous| classes[previous])
-                .is_some_and(|previous| shed_pair_aki(previous, class).1)
-        } else {
-            false
-        };
-        if shed {
-            flow.shed_to_half_em(opening);
-        }
+/// boundaries of §3.1.4 one half-em goes (see `punctuation_aki_sheds`), and
+/// middle dots keep their quarter-em sides.
+pub(super) fn shed_punctuation_aki(cells: &mut [FlowCell], aki_classes: &[Option<JapaneseClass>]) {
+    for (index, shed) in punctuation_aki_sheds(aki_classes) {
+        cells[index].shed_to_half_em(shed == AkiShed::Leading);
     }
+}
+
+/// Punctuation aki class of each cell (see `aki_class`). A cell classed by
+/// its own character takes `aki_class`, which leaves out curly quotes and
+/// `vpal` spans; ruby bases, tate-chu-yoko and sideways runs keep their
+/// `flow_classes` class.
+pub(super) fn aki_classes(
+    cells: &[FlowCell],
+    classes: &[Option<JapaneseClass>],
+    proportional_spans: &[bool],
+) -> Vec<Option<JapaneseClass>> {
+    cells
+        .iter()
+        .zip(classes)
+        .map(|(flow, class)| match flow.ch {
+            Some(ch) if *class == Some(classify(ch)) => {
+                aki_class(ch, false, proportional_spans[flow.cell.span])
+            }
+            _ => *class,
+        })
+        .collect()
 }
 
 /// Smallest legal flow extent after oikomi. Full-width punctuation floors at
@@ -1304,8 +1305,8 @@ mod tests {
         // the opening mark's leading half-em. TCY on the opposite side of
         // either bracket sets solid.
         let mut content = make_content_with_spans(&["く", "」", "20", "「", "く"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[2]
-            .set_text_combine_upright(TextCombineUpright::All);
+        content.paragraphs_mut()[0].children_mut()[2].text_combine_upright =
+            TextCombineUpright::All;
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
         assert!(matches!(layout.cells[2].kind, CellKind::TateChuYoko { .. }));
         for (index, label) in [(1, "」 before TCY"), (2, "TCY"), (3, "「 after TCY")] {
@@ -1317,8 +1318,8 @@ mod tests {
         }
 
         let mut reverse = make_content_with_spans(&["く", "「", "20", "」", "く"], 400.0);
-        reverse.paragraphs_mut()[0].children_mut()[2]
-            .set_text_combine_upright(TextCombineUpright::All);
+        reverse.paragraphs_mut()[0].children_mut()[2].text_combine_upright =
+            TextCombineUpright::All;
         let reverse = layout_with(&provider(VMTX_TEST_FONT), &reverse);
         assert!(matches!(
             reverse.cells[2].kind,
@@ -1331,8 +1332,8 @@ mod tests {
     #[test]
     fn tate_chu_yoko_digits_uses_the_same_cl30_adjacency() {
         let mut content = make_content_with_spans(&["く」31「く"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::Digits);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::Digits;
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
         let tcy_index = layout
             .cells

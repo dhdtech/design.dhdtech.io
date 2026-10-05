@@ -336,6 +336,7 @@ fn paint_text_glyph_silhouette(canvas: &Canvas, shape: &Shape) -> Result<()> {
         &shape.selrect(),
         shape.vertical_align(),
         &silhouette,
+        text_vertical::GlyphOutput::Outlines,
     ) {
         return Ok(());
     }
@@ -363,6 +364,7 @@ fn paint_text_stroke_opaque(canvas: &Canvas, shape: &Shape, stroke: &Stroke) -> 
                 &shape.selrect(),
                 shape.vertical_align(),
                 paint,
+                text_vertical::GlyphOutput::Outlines,
             );
         }
         return Ok(());

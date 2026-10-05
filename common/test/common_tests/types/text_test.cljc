@@ -419,3 +419,52 @@
   (t/is (= [["12345" false]] (jl/digit-combine-segments "12345" "digits")))
   (t/is (= [["1" false]] (jl/digit-combine-segments "1" "digits")))
   (t/is (nil? (jl/digit-combine-segments "31" "all"))))
+
+(t/deftest schema-accepts-every-japanese-enum-value
+  (doseq [[attr values] (dissoc jl/enum-values :writing-mode)
+          value         values]
+    (t/is (ctst/valid-content? (with-span-attrs {attr value})) (pr-str attr value)))
+  (doseq [value (:writing-mode jl/enum-values)]
+    (t/is (ctst/valid-content? (with-paragraph-attrs {:writing-mode value})) value)))
+
+(t/deftest japanese-enum-defaults-are-the-first-values
+  (t/is (= "horizontal-tb" (jl/enum-default :writing-mode)))
+  (t/is (= "space-around" (jl/enum-default :ruby-align)))
+  (t/is (= "auto" (jl/enum-default :ruby-overhang)))
+  (t/is (= {:writing-mode "horizontal-tb" :text-orientation "mixed"}
+           jl/paragraph-attr-defaults)))
+
+(t/deftest span-attr-defaults-cover-every-span-attr
+  (t/is (= (set jl/span-attrs) (set (keys jl/span-attr-defaults))))
+  (t/is (= "" (:ruby jl/span-attr-defaults)))
+  (t/is (false? (:ruby-hidden jl/span-attr-defaults)))
+  (t/is (= "half" (:ruby-size jl/span-attr-defaults))))
+
+(t/deftest valid-enum-value-checks-the-attr-values
+  (t/is (jl/valid-enum-value? :ruby-side "under"))
+  (t/is (not (jl/valid-enum-value? :ruby-side "left")))
+  (t/is (not (jl/valid-enum-value? :ruby-side nil))))
+
+(t/deftest digit-combine-covers-the-digits-values-only
+  (t/is (every? jl/digit-combine? ["digits" "digits2" "digits3"]))
+  (t/is (not-any? jl/digit-combine? ["none" "all" nil])))
+
+(t/deftest warichu-notes-show-no-ruby
+  (t/is (= "かん" (jl/visible-ruby {:text "漢字" :ruby "かん"})))
+  (t/is (nil? (jl/visible-ruby {:text "漢字" :ruby "かん" :warichu "warichu"})))
+  (t/is (nil? (jl/visible-ruby {:text "漢字" :ruby "かん" :ruby-hidden true}))))
+
+(t/deftest ruby-span-is-true-for-hidden-readings
+  (t/is (jl/ruby-span? {:ruby "かん" :ruby-hidden true}))
+  (t/is (not (jl/ruby-span? {:ruby " "})))
+  (t/is (not (jl/ruby-span? {}))))
+
+(t/deftest whole-shape-attr-reads-the-first-paragraph
+  (let [content {:type "root"
+                 :children [{:type "paragraph-set"
+                             :children [{:type "paragraph" :writing-mode "vertical-rl"
+                                         :children [{:text "a"}]}
+                                        {:type "paragraph" :writing-mode "horizontal-tb"
+                                         :children [{:text "b"}]}]}]}]
+    (t/is (= "vertical-rl" (jl/whole-shape-attr content :writing-mode)))
+    (t/is (nil? (jl/whole-shape-attr content :text-orientation)))))

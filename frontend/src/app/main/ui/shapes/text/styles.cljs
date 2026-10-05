@@ -15,19 +15,18 @@
    [app.main.ui.formats :as fmt]
    [app.util.color :as uc]
    [app.util.object :as obj]
-   [app.util.text.writing-mode :as wm]
-   [cuerdas.core :as str]))
+   [cuerdas.core :as str]
+   [rumext.v2 :as mf]))
 
 (defn generate-root-styles
+  "Root styles. `code?` leaves out the box size, which generated code sets
+   elsewhere. The root writing mode makes paragraph blocks stack
+   right-to-left."
   ([props node]
    (generate-root-styles props node false))
   ([{:keys [width height]} node code?]
    (let [valign (:vertical-align node "top")
-         ;; The root writing mode makes paragraph blocks stack right-to-left.
-         ;; Generated code keeps it whatever renderer is active.
-         writing-mode (if code?
-                        (jl/content-writing-mode node)
-                        (wm/content-writing-mode node))
+         writing-mode (jl/content-writing-mode node)
          base   #js {:height (when-not code? (fmt/format-pixels height))
                      :width  (when-not code? (fmt/format-pixels width))
                      :display "flex"
@@ -56,45 +55,52 @@
          :verticalAlign "top"}))
 
 (defn generate-paragraph-styles
-  "Paragraph styles. Writing mode follows the active renderer, except in
-   generated code (`code?`), which always keeps it."
-  ([shape data]
-   (generate-paragraph-styles shape data false))
-  ([_shape data code?]
-   (let [line-height (:line-height data)
-         line-height
-         (if (and (some? line-height) (not= "" line-height))
-           line-height
-           (:line-height txt/default-typography))
+  [_shape data]
+  (let [line-height (:line-height data)
+        line-height
+        (if (and (some? line-height) (not= "" line-height))
+          line-height
+          (:line-height txt/default-typography))
 
-         text-align  (:text-align data "start")
-         vertical-layout? (or code? (wm/vertical-layout-active?))
-         writing-mode (when vertical-layout? (:writing-mode data))
-         text-orientation (when vertical-layout? (:text-orientation data))
-         base        #js {;; Fix a problem when exporting HTML
-                          :fontSize 0
-                          :lineHeight line-height
-                          :margin 0}]
+        text-align       (:text-align data "start")
+        writing-mode     (:writing-mode data)
+        text-orientation (:text-orientation data)
+        base             #js {;; Fix a problem when exporting HTML
+                              :fontSize 0
+                              :lineHeight line-height
+                              :margin 0}]
 
-     (cond-> base
-       (some? line-height)       (obj/set! "lineHeight" line-height)
-       (some? line-height)       (obj/set! "--paragraph-line-height" (str line-height))
-       (some? text-align)        (obj/set! "textAlign" text-align)
-       (some? writing-mode)      (obj/set! "writingMode" writing-mode)
-       (some? writing-mode)      (obj/set! "textSpacingTrim" "normal")
-       (= writing-mode "vertical-rl") (obj/set! "textAutospace" "normal")
-       (some? text-orientation)  (obj/set! "textOrientation" text-orientation)))))
+    (cond-> base
+      (some? line-height)       (obj/set! "lineHeight" line-height)
+      (some? line-height)       (obj/set! "--paragraph-line-height" (str line-height))
+      (some? text-align)        (obj/set! "textAlign" text-align)
+      (some? writing-mode)      (obj/set! "writingMode" writing-mode)
+      (some? writing-mode)      (obj/set! "textSpacingTrim" "normal")
+      (= writing-mode "vertical-rl") (obj/set! "textAutospace" "normal")
+      (some? text-orientation)  (obj/set! "textOrientation" text-orientation))))
 
 (defn css-text-combine-upright
   "CSS value for a persisted text-combine-upright, or nil for the digits
    variants: browsers do not support CSS `digits <n>`, so renderers wrap each
    digit run (`jl/digit-combine-segments`) in an `all` span instead."
   [value]
-  (when-not (contains? #{"digits" "digits2" "digits3"} value)
+  (when-not (jl/digit-combine? value)
     value))
 
 ;; Style of a combined digit run inside a `digits` span.
 (def tcy-run-style #js {:textCombineUpright "all"})
+
+(defn text-children
+  "Text of a node, with each combined digit run of a `digits` tate-chu-yoko
+   in its own `all` span (class `tcy` for generated code)."
+  [text node]
+  (if-let [segments (jl/digit-combine-segments text (:text-combine-upright node))]
+    (into-array
+     (for [[index [run combine?]] (d/enumerate segments)]
+       (if combine?
+         (mf/html [:span.tcy {:key index :style tcy-run-style} run])
+         run)))
+    text))
 
 (defn- set-value?
   "True for a stored style value other than empty or \"none\"."
@@ -130,7 +136,6 @@
   (let [text-combine-upright (:text-combine-upright data)
         text-emphasis        (:text-emphasis data)
         font-features        (font-feature-settings (:font-features data))
-        annotation-clearance (:annotation-clearance data)
         line-height          (annotation-line-height data)
         font-size            (:font-size data)]
     (cond-> style
@@ -144,9 +149,6 @@
 
       (some? font-features)
       (obj/set! "fontFeatureSettings" font-features)
-
-      (and (string? annotation-clearance) (pos? (alength annotation-clearance)))
-      (obj/set! "--annotation-clearance" annotation-clearance)
 
       (some? line-height)
       (obj/set! "lineHeight" line-height)
@@ -277,15 +279,17 @@
       (obj/unset! "textEmphasis")
       (obj/unset! "fontFeatureSettings")
       (obj/unset! "display")
-      (obj/unset! "inlineSize")
-      (obj/unset! "--annotation-clearance")))
+      (obj/unset! "inlineSize")))
+
+(defn- enum-or-default
+  "Value of the Japanese layout enum `attr` in `data`, or its default when
+   unset or unknown."
+  [data attr]
+  (let [value (get data attr)]
+    (if (jl/valid-enum-value? attr value) value (jl/enum-default attr))))
 
 (defn generate-ruby-container-styles
   [data]
-  #js {:rubyPosition (if (= "under" (:ruby-side data)) "under" "over")
-       :rubyAlign (case (:ruby-align data)
-                    "center" "center"
-                    "start" "start"
-                    "space-between" "space-between"
-                    "space-around")
-       :rubyOverhang (if (= "none" (:ruby-overhang data)) "none" "auto")})
+  #js {:rubyPosition (enum-or-default data :ruby-side)
+       :rubyAlign    (enum-or-default data :ruby-align)
+       :rubyOverhang (enum-or-default data :ruby-overhang)})

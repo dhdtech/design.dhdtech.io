@@ -66,6 +66,16 @@ pub(crate) fn writing_svg() -> bool {
     WRITING_SVG.with(Cell::get)
 }
 
+/// Glyph output for vertical text drawn on the current canvas: outlines
+/// while an SVG export draws, text blobs otherwise.
+pub(crate) fn vertical_glyph_output() -> crate::shapes::text_vertical::GlyphOutput {
+    if writing_svg() {
+        crate::shapes::text_vertical::GlyphOutput::Outlines
+    } else {
+        crate::shapes::text_vertical::GlyphOutput::Text
+    }
+}
+
 /// Marks the SVG export as running until dropped.
 struct WritingSvg;
 

@@ -106,8 +106,8 @@ pub struct RawParagraphData {
     text_direction: RawTextDirection,
     text_decoration: RawTextDecoration,
     text_transform: RawTextTransform,
-    writing_mode: RawWritingMode,
-    text_orientation: RawTextOrientation,
+    writing_mode: u8,
+    text_orientation: u8,
     // Padding for the CLJS writer's 4-byte-aligned layout; always zero.
     _padding: [u8; 2],
     line_height: f32,
@@ -138,16 +138,16 @@ pub struct RawTextSpan {
     text_decoration: RawTextDecoration,
     text_transform: RawTextTransform,
     text_direction: RawTextDirection,
-    text_orientation: RawTextOrientation,
-    text_combine_upright: RawTextCombineUpright,
-    text_emphasis: RawTextEmphasis,
-    warichu: RawWarichu,
-    font_features: RawFontFeatures,
-    annotation_clearance: RawAnnotationClearance,
-    ruby_size: RawRubySize,
-    ruby_align: RawRubyAlign,
-    ruby_overhang: RawRubyOverhang,
-    ruby_side: RawRubySide,
+    text_orientation: u8,
+    text_combine_upright: u8,
+    text_emphasis: u8,
+    warichu: u8,
+    font_features: u8,
+    annotation_clearance: u8,
+    ruby_size: u8,
+    ruby_align: u8,
+    ruby_overhang: u8,
+    ruby_side: u8,
     // Padding for the CLJS writer's 4-byte-aligned layout; always zero.
     _padding: [u8; 2],
     font_size: f32,
@@ -210,16 +210,16 @@ impl From<RawTextSpan> for shapes::TextSpan {
             uuid_from_u32(value.font_variant_id),
             fills,
         );
-        span.set_text_orientation(value.text_orientation.into());
-        span.set_text_combine_upright(value.text_combine_upright.into());
-        span.set_text_emphasis(value.text_emphasis.into());
-        span.set_warichu(value.warichu.into());
-        span.set_font_features(value.font_features.into());
-        span.set_annotation_clearance(value.annotation_clearance.into());
-        span.set_ruby_size(value.ruby_size.into());
-        span.set_ruby_align(value.ruby_align.into());
-        span.set_ruby_overhang(value.ruby_overhang.into());
-        span.set_ruby_side(value.ruby_side.into());
+        span.text_orientation = RawTextOrientation::from(value.text_orientation).into();
+        span.text_combine_upright = RawTextCombineUpright::from(value.text_combine_upright).into();
+        span.text_emphasis = RawTextEmphasis::from(value.text_emphasis).into();
+        span.warichu = RawWarichu::from(value.warichu).into();
+        span.font_features = RawFontFeatures::from(value.font_features).into();
+        span.annotation_clearance = RawAnnotationClearance::from(value.annotation_clearance).into();
+        span.ruby_size = RawRubySize::from(value.ruby_size).into();
+        span.ruby_align = RawRubyAlign::from(value.ruby_align).into();
+        span.ruby_overhang = RawRubyOverhang::from(value.ruby_overhang).into();
+        span.ruby_side = RawRubySide::from(value.ruby_side).into();
         span
     }
 }
@@ -278,7 +278,7 @@ impl From<RawParagraph> for shapes::Paragraph {
                 span.set_text(String::from_utf8_lossy(text_buffer).to_string());
             }
             if !ruby_buffer.is_empty() {
-                span.set_ruby(String::from_utf8_lossy(ruby_buffer).to_string());
+                span.ruby = String::from_utf8_lossy(ruby_buffer).to_string();
             }
             spans.push(span);
             offset += delta;
@@ -294,8 +294,9 @@ impl From<RawParagraph> for shapes::Paragraph {
             value.attrs.letter_spacing,
             spans,
         );
-        paragraph.set_writing_mode(value.attrs.writing_mode.into());
-        paragraph.set_text_orientation(value.attrs.text_orientation.into());
+        paragraph.set_writing_mode(RawWritingMode::from(value.attrs.writing_mode).into());
+        paragraph
+            .set_text_orientation(RawTextOrientation::from(value.attrs.text_orientation).into());
         paragraph
     }
 }
@@ -565,5 +566,42 @@ mod tests {
         assert_eq!(span.ruby_align, RubyAlign::SpaceBetween);
         assert_eq!(span.ruby_overhang, RubyOverhang::None);
         assert_eq!(span.ruby_side, RubySide::Under);
+    }
+
+    #[test]
+    fn out_of_range_japanese_span_bytes_fall_back_to_defaults() {
+        let mut bytes = [0u8; RAW_SPAN_DATA_SIZE];
+        bytes[4..14].fill(0xFF);
+
+        let span = shapes::TextSpan::from(RawTextSpan::from(bytes));
+
+        assert_eq!(span.text_orientation, shapes::TextOrientation::Mixed);
+        assert_eq!(span.text_combine_upright, shapes::TextCombineUpright::None);
+        assert_eq!(span.text_emphasis, shapes::TextEmphasis::None);
+        assert!(!span.warichu);
+        assert_eq!(span.font_features, FontFeatures::None);
+        assert_eq!(span.annotation_clearance, AnnotationClearance::None);
+        assert_eq!(span.ruby_size, RubySize::Half);
+        assert_eq!(span.ruby_align, RubyAlign::SpaceAround);
+        assert_eq!(span.ruby_overhang, RubyOverhang::Auto);
+        assert_eq!(span.ruby_side, RubySide::Over);
+    }
+
+    #[test]
+    fn out_of_range_paragraph_writing_bytes_fall_back_to_defaults() {
+        let mut bytes = [0u8; RAW_PARAGRAPH_DATA_SIZE];
+        bytes[8] = 0xFF;
+        bytes[9] = 0xFF;
+
+        let attrs = RawParagraphData::from(bytes);
+
+        assert_eq!(
+            shapes::WritingMode::from(RawWritingMode::from(attrs.writing_mode)),
+            shapes::WritingMode::HorizontalTb
+        );
+        assert_eq!(
+            shapes::TextOrientation::from(RawTextOrientation::from(attrs.text_orientation)),
+            shapes::TextOrientation::Mixed
+        );
     }
 }

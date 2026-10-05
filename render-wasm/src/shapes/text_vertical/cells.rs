@@ -86,7 +86,7 @@ fn split_sideways_words(segment: Segment) -> Vec<Segment> {
     let mut previous_space = false;
     for ch in segment.text.chars() {
         match words.last_mut() {
-            Some(word) if !(previous_space && !ch.is_whitespace()) => word.text.push(ch),
+            Some(word) if !previous_space || ch.is_whitespace() => word.text.push(ch),
             _ => words.push(Segment {
                 text: ch.to_string(),
                 utf16_start: utf16,
@@ -849,8 +849,8 @@ mod tests {
     #[test]
     fn tate_chu_yoko_span_becomes_one_upright_cell() {
         let mut content = make_content_with_spans(&["20", "年"], 200.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::All);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::All;
 
         let layout = layout_content(&content, 200.0);
 
@@ -868,7 +868,7 @@ mod tests {
         let spans = content.paragraphs_mut()[0].children_mut();
         spans[0].ruby = "あ".to_string();
         for span in spans {
-            span.set_text_combine_upright(TextCombineUpright::All);
+            span.text_combine_upright = TextCombineUpright::All;
         }
 
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
@@ -897,8 +897,8 @@ mod tests {
         // A CJK-covering face keeps the whole marked span in one upright
         // composite cell (run_count >= 1); the next span is a separate cell.
         let mut content = make_content_with_spans(&["くく", "あ"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::All);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::All;
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
         let CellKind::TateChuYoko { run_count, .. } = layout.cells[0].kind else {
             panic!("expected a Tate-chu-yoko cell");
@@ -914,8 +914,8 @@ mod tests {
         // A run far wider than the em would scale below MIN_TCY_SCALE, so it
         // gets normal layout.
         let mut content = make_content_with_spans(&["123456789"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::All);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::All;
         let layout = layout_content(&content, 400.0);
         assert!(
             !layout
@@ -982,8 +982,8 @@ mod tests {
     #[test]
     fn tate_chu_yoko_digits_combines_only_digit_runs() {
         let mut content = make_content_with_spans(&["あ31く"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::Digits);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::Digits;
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
         let tcy: Vec<&VerticalCell> = layout
             .cells
@@ -1004,8 +1004,8 @@ mod tests {
     #[test]
     fn tate_chu_yoko_digits_combines_four_ascii_digits() {
         let mut content = make_content_with_spans(&["2025年"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::Digits);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::Digits;
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
         let tcy = layout
             .cells
@@ -1019,8 +1019,8 @@ mod tests {
     #[test]
     fn tate_chu_yoko_digits_combines_full_width_unicode_digits() {
         let mut content = make_content_with_spans(&["２０２６年"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::Digits);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::Digits;
         let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
         let tcy = layout
             .cells

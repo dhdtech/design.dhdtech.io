@@ -69,11 +69,19 @@ impl<'a> VectorRenderer<'a> {
         let bounds = text_content.bounds();
         let vertical_align = shape.vertical_align();
         let layout = text_content.vertical_layout(&bounds);
+        let output = crate::render::svg::vertical_glyph_output();
 
         for shadow in &shape.drop_shadow_paints() {
-            text_vertical::paint_drop_shadow(self.canvas, &layout, &bounds, vertical_align, shadow);
+            text_vertical::paint_drop_shadow(
+                self.canvas,
+                &layout,
+                &bounds,
+                vertical_align,
+                shadow,
+                output,
+            );
         }
-        text::paint_vertical_fill(self.canvas, shape, &layout, &bounds, blur_filter);
+        text::paint_vertical_fill(self.canvas, shape, &layout, &bounds, blur_filter, output);
         let selrect = shape.selrect();
         for stroke in shape.visible_strokes().rev() {
             text_vertical::paint_stroke(
@@ -84,6 +92,7 @@ impl<'a> VectorRenderer<'a> {
                 stroke,
                 &selrect,
                 blur_filter,
+                output,
             );
         }
     }

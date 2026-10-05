@@ -248,7 +248,7 @@ body {
           (sts/generate-paragraph-set-styles shape)
 
           (:paragraph "paragraph")
-          (sts/generate-paragraph-styles shape node true)
+          (sts/generate-paragraph-styles shape node)
 
           (sts/generate-text-styles shape node))]
     (dm/fmt
@@ -271,7 +271,7 @@ body {
 (defn- tcy-css
   "Rule for the combined digit runs of `digits` tate-chu-yoko spans, or nil."
   [shape shape-selector]
-  (when (some #(jl/digit-combine-segments "" (:text-combine-upright %))
+  (when (some #(jl/digit-combine? (:text-combine-upright %))
               (types.text/node-seq types.text/is-text-node? (:content shape)))
     (dm/fmt ".% .tcy {\n%\n}" shape-selector (format-js-styles sts/tcy-run-style nil))))
 

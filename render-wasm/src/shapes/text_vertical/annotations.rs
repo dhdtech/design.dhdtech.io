@@ -7,15 +7,19 @@ use std::collections::HashMap;
 
 use skia_safe::{self as skia, Font};
 
-use crate::shapes::japanese::{classify, JapaneseClass};
-use crate::shapes::text_japanese::{emphasis_char_allowed, EMPHASIS_FONT_SCALE};
+use crate::shapes::text_japanese::{
+    distribute_ruby_tops, emphasis_char_allowed, long_ruby_gap, ruby_overhang_room,
+    EMPHASIS_FONT_SCALE,
+};
 use crate::shapes::{
-    AppliedTextTransform, FontFeatures, Paragraph, RubyAlign, RubyOverhang, RubySide, TextContent,
+    AppliedTextTransform, FontFeatures, Paragraph, RubyOverhang, RubySide, TextContent, TextSpan,
 };
 
 use super::cells::Fonts;
 use super::flow::FlowCell;
-use super::layout::{column_base_center, CellKind, VerticalCell, VerticalColumn, VerticalLayout};
+use super::layout::{
+    column_base_center, CellKind, ParagraphTextMap, VerticalCell, VerticalColumn, VerticalLayout,
+};
 use super::shaping::{shape_segment, shape_segment_with_fallbacks, span_font_families, ShapedRun};
 
 /// One shaped ruby glyph, retaining its fallback-font run and source range.
@@ -27,8 +31,8 @@ pub struct RubyGlyph {
     pub utf16_end: usize,
 }
 
-/// A ruby annotation beside one column of base characters, painted from
-/// `ruby_runs`.
+/// The reading of one ruby span, beside its base in one column, painted from
+/// `ruby_runs`. Group ruby keeps a base in one column.
 #[derive(Debug, Clone)]
 pub struct RubyCell {
     /// Glyphs in order; each keeps its shaped run so fallback fonts survive.
@@ -36,8 +40,6 @@ pub struct RubyCell {
     pub paragraph: usize,
     pub span: usize,
     pub column: usize,
-    /// Flow-axis (top, extent) of each annotated base character in the column.
-    pub base_segments: Vec<(f32, f32)>,
     /// Flow-axis top of each glyph.
     pub glyph_tops: Vec<f32>,
     pub font_size: f32,
@@ -60,108 +62,6 @@ pub struct EmphasisMark {
     pub outside_offset: f32,
 }
 
-/// Item range proportional to a contiguous slice of the base text. Keeps a
-/// reading monotonic when its base wraps across columns; the final slice gets
-/// the rounding remainder.
-fn proportional_range(
-    item_count: usize,
-    base_start: usize,
-    base_count: usize,
-    total_base_count: usize,
-) -> std::ops::Range<usize> {
-    if item_count == 0 || total_base_count == 0 {
-        return 0..0;
-    }
-    let start = base_start.saturating_mul(item_count) / total_base_count;
-    let end_base = base_start.saturating_add(base_count).min(total_base_count);
-    let end = if end_base == total_base_count {
-        item_count
-    } else {
-        end_base.saturating_mul(item_count) / total_base_count
-    };
-    start.min(item_count)..end.min(item_count)
-}
-
-/// Room a long reading may overhang one neighbouring character (JLREQ
-/// §3.3.8): up to one ruby character, and half the neighbour, over kana
-/// without ruby of their own. Kanji, punctuation, another ruby base and a
-/// line edge (`None`) get no overhang, nor does any neighbour under
-/// `RubyOverhang::None`.
-pub(crate) fn ruby_overhang_room(
-    policy: RubyOverhang,
-    neighbour: Option<char>,
-    neighbour_has_ruby: bool,
-    neighbour_extent: f32,
-    ruby_font_size: f32,
-) -> f32 {
-    let kana = neighbour.is_some_and(|ch| {
-        matches!(
-            classify(ch),
-            JapaneseClass::Hiragana
-                | JapaneseClass::Katakana
-                | JapaneseClass::SmallKana
-                | JapaneseClass::ProlongedSoundMark
-        )
-    });
-    if policy == RubyOverhang::Auto && kana && !neighbour_has_ruby {
-        ruby_font_size.min(neighbour_extent / 2.0).max(0.0)
-    } else {
-        0.0
-    }
-}
-
-/// Flow-axis top of each of `count` ruby glyphs of `advance` along the base
-/// segment `[seg_top, seg_top + seg_extent)`. Per jlreq:
-///
-/// - Ruby that fits the base is placed by `align`; `SpaceAround` is even
-///   distribution (均等割り付け): equal slots, each glyph centred in its slot.
-/// - Longer ruby packs at its own advance and overhangs the base, centred
-///   where the `room` (before, after) of its neighbours allows. Layout grows
-///   the base so the overflow fits that room.
-pub(crate) fn distribute_ruby_tops(
-    seg_top: f32,
-    seg_extent: f32,
-    count: usize,
-    advance: f32,
-    align: RubyAlign,
-    room: (f32, f32),
-) -> Vec<f32> {
-    if count == 0 {
-        return Vec::new();
-    }
-    let line = advance * count as f32;
-    if line <= seg_extent {
-        match align {
-            RubyAlign::SpaceAround => {
-                let slot = seg_extent / count as f32;
-                (0..count)
-                    .map(|i| seg_top + slot * (i as f32 + 0.5) - advance / 2.0)
-                    .collect()
-            }
-            RubyAlign::Center => {
-                let start = seg_top + (seg_extent - line) / 2.0;
-                (0..count).map(|i| start + advance * i as f32).collect()
-            }
-            RubyAlign::Start => (0..count).map(|i| seg_top + advance * i as f32).collect(),
-            RubyAlign::SpaceBetween if count > 1 => {
-                let gap = (seg_extent - line) / (count - 1) as f32;
-                (0..count)
-                    .map(|i| seg_top + (advance + gap) * i as f32)
-                    .collect()
-            }
-            RubyAlign::SpaceBetween => vec![seg_top + (seg_extent - advance) / 2.0],
-        }
-    } else {
-        let overflow = line - seg_extent;
-        let (before, after) = room;
-        let overhang = (overflow / 2.0)
-            .min(before)
-            .max((overflow - after).min(before));
-        let start = seg_top - overhang.max(0.0);
-        (0..count).map(|i| start + advance * i as f32).collect()
-    }
-}
-
 /// Cross-axis start of a vertical ruby strip. Ruby attaches to the edge of the
 /// base em, centred in the column advance (`base_width`), so line height adds
 /// no gap between ruby and base.
@@ -179,13 +79,13 @@ pub(super) fn ruby_strip_x(
 }
 
 /// The base text of one ruby span: the transformed UTF-16 range it covers in
-/// its paragraph and the length of its reading.
+/// its paragraph and the glyph count of its reading.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RubyBaseUnit {
     span: usize,
     start: usize,
     end: usize,
-    ruby_len: usize,
+    ruby_glyphs: usize,
     ruby_font_size: f32,
     overhang: RubyOverhang,
     /// Overhang room over the characters before and after the base.
@@ -197,17 +97,19 @@ impl RubyBaseUnit {
         cell.span == self.span && cell.start < self.end && cell.end > self.start
     }
 
-    /// Flow length of the reading set solid at the ruby font size.
-    fn ruby_line(&self, ruby_len: usize) -> f32 {
-        self.ruby_font_size * ruby_len as f32
+    /// Flow length of the reading set solid: one ruby em per glyph.
+    fn ruby_line(&self) -> f32 {
+        self.ruby_font_size * self.ruby_glyphs as f32
     }
 }
 
-/// Ruby base units of a paragraph, from its spans' layout text.
+/// Ruby base units of a paragraph, from its spans' layout text. Shapes each
+/// reading to count its glyphs.
 pub(super) fn ruby_base_units(
     paragraph: &Paragraph,
     transforms: &[AppliedTextTransform],
     span_starts: &[usize],
+    fonts: &Fonts,
 ) -> Vec<RubyBaseUnit> {
     paragraph
         .children()
@@ -219,12 +121,28 @@ pub(super) fn ruby_base_units(
             span: span_index,
             start: span_starts[span_index],
             end: span_starts[span_index] + transform.text.encode_utf16().count(),
-            ruby_len: span.ruby_text().chars().count(),
+            ruby_glyphs: shape_ruby(span, fonts)
+                .iter()
+                .map(|run| run.glyphs.len())
+                .sum(),
             ruby_font_size: span.ruby_font_size(),
             overhang: span.ruby_overhang,
             room: (0.0, 0.0),
         })
         .collect()
+}
+
+/// The span's reading shaped upright at the ruby size.
+fn shape_ruby(span: &TextSpan, fonts: &Fonts) -> Vec<ShapedRun> {
+    shape_segment_with_fallbacks(
+        span.ruby_text(),
+        span.ruby_font_size(),
+        &span_font_families(span, fonts.fallback_families),
+        fonts.provider,
+        true,
+        span.font_features,
+        fonts.fallback_mgr,
+    )
 }
 
 /// Overhang room of every unit over its flow neighbours, before placement.
@@ -327,37 +245,36 @@ pub(super) fn ruby_rooms(paragraph: usize, ruby_units: &[RubyBaseUnit]) -> RubyR
 
 /// Grow the flow extent of base cells under long ruby before column planning,
 /// so wrapping makes room (forced spreading). Only the part of the reading
-/// that its overhang room cannot take grows the base. The growth goes into
-/// gaps between characters, so the last cell keeps its extent; a
-/// single-character base grows around its centred glyph.
+/// that its overhang room cannot take grows the base: each cell grows by one
+/// `long_ruby_gap`, its glyph centred, which leaves a full gap between
+/// characters and half a gap at each end.
 pub(super) fn grow_ruby_bases(flow: &mut [FlowCell], ruby_units: &[RubyBaseUnit]) {
     let all_indices = annotated_indices(flow.iter().map(|item| &item.cell), ruby_units);
     for (unit, indices) in ruby_units.iter().zip(&all_indices) {
-        let Some((last, growing)) = indices.split_last() else {
-            continue;
-        };
         let base_total: f32 = indices.iter().map(|index| flow[*index].cell.extent).sum();
-        let deficit = unit.ruby_line(unit.ruby_len) - base_total - unit.room.0 - unit.room.1;
-        if deficit <= 0.0 {
+        let gap = long_ruby_gap(
+            unit.ruby_glyphs,
+            unit.ruby_font_size,
+            base_total,
+            unit.room,
+            indices.len(),
+        );
+        if gap <= 0.0 {
             continue;
         }
-        if growing.is_empty() {
-            flow[*last].cell.extent += deficit;
-            flow[*last].cell.glyph_flow_shift += deficit / 2.0;
-            flow[*last].cell.ink_top += deficit / 2.0;
-            flow[*last].cell.ink_bottom += deficit / 2.0;
-            continue;
-        }
-        let gap = deficit / growing.len() as f32;
-        for index in growing {
-            flow[*index].cell.extent += gap;
+        for index in indices {
+            let cell = &mut flow[*index].cell;
+            cell.extent += gap;
+            cell.glyph_flow_shift += gap / 2.0;
+            cell.ink_top += gap / 2.0;
+            cell.ink_bottom += gap / 2.0;
         }
     }
 }
 
 /// Widen gaps between placed base cells under long ruby. Shifts only later
-/// cells of the same span and column, and only into slack before the next
-/// cell or the column bottom, so columns never re-wrap.
+/// cells of the span, and only into slack before the next cell or the
+/// column bottom, so columns never re-wrap. A base sits in one column.
 pub(super) fn spread_ruby_base_cells(
     cells: &mut [VerticalCell],
     ruby_units: &[RubyBaseUnit],
@@ -370,85 +287,38 @@ pub(super) fn spread_ruby_base_cells(
     };
     let column_cells = cells_by_column(cells);
     let all_indices = annotated_indices(cells.iter(), ruby_units);
-    for (unit, indices) in ruby_units.iter().zip(all_indices) {
-        let total_base_count = indices.len();
-        let mut by_column: Vec<(usize, usize)> = indices
-            .into_iter()
-            .map(|index| (cells[index].column, index))
-            .collect();
-        by_column.sort_by_key(|(column, _)| *column);
+    for (unit, mut base) in ruby_units.iter().zip(all_indices) {
+        if base.len() < 2 {
+            continue;
+        }
+        base.sort_by(|a, b| cells[*a].top.total_cmp(&cells[*b].top));
+        let ruby_line = unit.ruby_line() - unit.room.0 - unit.room.1;
+        let first = base[0];
+        let last = base[base.len() - 1];
+        let base_top = cells[first].top;
+        let base_bottom = cells[last].top + cells[last].extent;
+        let base_extent = base_bottom - base_top;
+        if ruby_line <= base_extent {
+            continue;
+        }
 
-        let mut base_start = 0usize;
-        for group in by_column.chunk_by(|a, b| a.0 == b.0) {
-            let column = group[0].0;
-            let mut group: Vec<usize> = group.iter().map(|(_, index)| *index).collect();
-            let group_start = base_start;
-            base_start += group.len();
-            if group.len() < 2 {
-                continue;
-            }
-            group.sort_by(|a, b| cells[*a].top.total_cmp(&cells[*b].top));
+        let next_top = column_cells[&cells[first].column]
+            .iter()
+            .map(|index| &cells[*index])
+            .filter(|cell| !unit.annotates(cell) && cell.top >= base_bottom)
+            .map(|cell| cell.top)
+            .min_by(f32::total_cmp);
+        let limit = next_top.unwrap_or(column_limit);
+        let spread = (ruby_line - base_extent).min((limit - base_bottom).max(0.0));
+        if spread <= 0.0 {
+            continue;
+        }
 
-            let ruby_range =
-                proportional_range(unit.ruby_len, group_start, group.len(), total_base_count);
-            let ruby_line = unit.ruby_line(ruby_range.len()) - unit.room.0 - unit.room.1;
-            let first = group[0];
-            let last = group[group.len() - 1];
-            let base_top = cells[first].top;
-            let base_bottom = cells[last].top + cells[last].extent;
-            let base_extent = base_bottom - base_top;
-            if ruby_line <= base_extent {
-                continue;
-            }
-
-            let next_top = column_cells[&column]
-                .iter()
-                .map(|index| &cells[*index])
-                .filter(|cell| !unit.annotates(cell) && cell.top >= base_bottom)
-                .map(|cell| cell.top)
-                .min_by(f32::total_cmp);
-            let limit = next_top.unwrap_or(column_limit);
-            let spread = (ruby_line - base_extent).min((limit - base_bottom).max(0.0));
-            if spread <= 0.0 {
-                continue;
-            }
-
-            let gap = spread / (group.len() - 1) as f32;
-            for (position, index) in group.iter().enumerate().skip(1) {
-                cells[*index].top += gap * position as f32;
-            }
+        let gap = spread / (base.len() - 1) as f32;
+        for (position, index) in base.iter().enumerate().skip(1) {
+            cells[*index].top += gap * position as f32;
         }
     }
-}
-
-/// The base cells of one ruby span inside one column.
-struct RubyBaseColumn {
-    column: usize,
-    /// Paint of the column's first base cell.
-    paint: usize,
-    /// Flow-axis (top, extent) of each base cell, sorted along the column.
-    segments: Vec<(f32, f32)>,
-}
-
-/// Base cells of one span grouped by column, in flow (column index) order.
-fn ruby_base_columns(cells: &[VerticalCell], span_cells: &[usize]) -> Vec<RubyBaseColumn> {
-    let mut columns: Vec<RubyBaseColumn> = Vec::new();
-    for cell in span_cells.iter().map(|index| &cells[*index]) {
-        let segment = (cell.top, cell.extent);
-        match columns.iter_mut().find(|base| base.column == cell.column) {
-            Some(base) => base.segments.push(segment),
-            None => columns.push(RubyBaseColumn {
-                column: cell.column,
-                paint: cell.paint,
-                segments: vec![segment],
-            }),
-        }
-    }
-    columns.sort_by_key(|base| base.column);
-    for base in columns.iter_mut() {
-        base.segments.sort_by(|a, b| a.0.total_cmp(&b.0));
-    }
-    columns
 }
 
 /// One `RubyGlyph` per shaped glyph of `ruby_text`, with UTF-16 offsets into
@@ -507,10 +377,9 @@ fn room_inside_column(
 }
 
 /// Ruby (furigana) placement. Runs after column placement, since ruby follows
-/// its base's final column and flow extent. A base taller than its column
-/// stays in it, so a reading only splits across columns in proportion to
-/// the base characters when the base was split by a forced fallback.
-/// `rooms` holds the overhang room of each (paragraph, span).
+/// its base's final column and flow extent. Group ruby keeps each base in one
+/// column, so each reading is one `RubyCell`. `rooms` holds the overhang
+/// room of each (paragraph, span).
 pub(super) fn layout_ruby(
     text_content: &TextContent,
     cells: &[VerticalCell],
@@ -523,27 +392,25 @@ pub(super) fn layout_ruby(
     let column_cells = cells_by_column(cells);
     for (paragraph_index, paragraph) in text_content.paragraphs().iter().enumerate() {
         for (span_index, span) in paragraph.children().iter().enumerate() {
-            let ruby_text = span.ruby_text();
-            if ruby_text.is_empty() {
+            if !span.has_ruby() {
                 continue;
             }
-            let Some(span_cells) = span_cells.get(&(paragraph_index, span_index)) else {
+            let Some(base) = span_cells.get(&(paragraph_index, span_index)) else {
                 continue;
             };
-            let base_columns = ruby_base_columns(cells, span_cells);
-            if base_columns.is_empty() {
+            let (Some(first), Some(last)) = (
+                base.iter()
+                    .map(|index| &cells[*index])
+                    .min_by(|a, b| a.top.total_cmp(&b.top)),
+                base.iter()
+                    .map(|index| &cells[*index])
+                    .max_by(|a, b| (a.top + a.extent).total_cmp(&(b.top + b.extent))),
+            ) else {
                 continue;
-            }
+            };
+            let ruby_text = span.ruby_text();
             let ruby_font_size = span.ruby_font_size();
-            let shaped = shape_segment_with_fallbacks(
-                ruby_text,
-                ruby_font_size,
-                &span_font_families(span, fonts.fallback_families),
-                fonts.provider,
-                true,
-                span.font_features,
-                fonts.fallback_mgr,
-            );
+            let shaped = shape_ruby(span, fonts);
             let leading_utf16 = span.ruby[..span.ruby.len() - span.ruby.trim_start().len()]
                 .encode_utf16()
                 .count();
@@ -553,59 +420,32 @@ pub(super) fn layout_ruby(
             }
             ruby_runs.extend(shaped);
 
-            let total_base_count: usize = base_columns.iter().map(|base| base.segments.len()).sum();
-            let mut base_start = 0usize;
-            for RubyBaseColumn {
-                column,
-                paint,
-                segments: base_segments,
-            } in base_columns
-            {
-                let glyph_range = proportional_range(
-                    glyphs.len(),
-                    base_start,
-                    base_segments.len(),
-                    total_base_count,
-                );
-                base_start += base_segments.len();
-                let column_glyphs = glyphs[glyph_range].to_vec();
-                if column_glyphs.is_empty() {
-                    continue;
-                }
-                let top = base_segments[0].0;
-                let (last_top, last_extent) = base_segments[base_segments.len() - 1];
-                let room = rooms
-                    .get(&(paragraph_index, span_index))
-                    .copied()
-                    .unwrap_or((0.0, 0.0));
-                let room = room_inside_column(
-                    cells,
-                    &column_cells[&column],
-                    top,
-                    last_top + last_extent,
-                    room,
-                );
-                let glyph_tops = distribute_ruby_tops(
-                    top,
-                    (last_top + last_extent - top).max(0.0),
-                    column_glyphs.len(),
-                    ruby_font_size,
-                    span.ruby_align,
-                    room,
-                );
-                ruby_cells.push(RubyCell {
-                    glyphs: column_glyphs,
-                    paragraph: paragraph_index,
-                    span: span_index,
-                    column,
-                    base_segments,
-                    glyph_tops,
-                    font_size: ruby_font_size,
-                    base_font_size: span.font_size,
-                    side: span.ruby_side,
-                    paint,
-                });
-            }
+            let top = first.top;
+            let bottom = last.top + last.extent;
+            let room = rooms
+                .get(&(paragraph_index, span_index))
+                .copied()
+                .unwrap_or((0.0, 0.0));
+            let room = room_inside_column(cells, &column_cells[&first.column], top, bottom, room);
+            let glyph_tops = distribute_ruby_tops(
+                top,
+                (bottom - top).max(0.0),
+                glyphs.len(),
+                ruby_font_size,
+                span.ruby_align,
+                room,
+            );
+            ruby_cells.push(RubyCell {
+                glyphs,
+                paragraph: paragraph_index,
+                span: span_index,
+                column: first.column,
+                glyph_tops,
+                font_size: ruby_font_size,
+                base_font_size: span.font_size,
+                side: span.ruby_side,
+                paint: first.paint,
+            });
         }
     }
     (ruby_runs, ruby_cells)
@@ -695,8 +535,7 @@ pub(super) fn layout_emphasis(
     text_content: &TextContent,
     cells: &[VerticalCell],
     runs: &[ShapedRun],
-    span_utf16_starts: &[Vec<usize>],
-    span_transforms: &[Vec<AppliedTextTransform>],
+    text_maps: &[ParagraphTextMap],
     fonts: &Fonts,
 ) -> (Vec<ShapedRun>, Vec<EmphasisMark>) {
     let mut emphasis_runs: Vec<ShapedRun> = Vec::new();
@@ -737,10 +576,10 @@ pub(super) fn layout_emphasis(
             }
             let run_index = emphasis_runs.len();
             emphasis_runs.push(shaped.remove(0));
-            let span_start = span_utf16_starts[paragraph_index][span_index];
+            let text_map = &text_maps[paragraph_index];
+            let span_start = text_map.span_starts[span_index];
             // Cell offsets index the span's transformed text.
-            let span_text =
-                Utf16Boundaries::new(&span_transforms[paragraph_index][span_index].text);
+            let span_text = Utf16Boundaries::new(&text_map.span_transforms[span_index].text);
             for cell_index in span_cells.iter().copied() {
                 let cell = &cells[cell_index];
                 let text = span_text.slice(cell.start - span_start, cell.end - span_start);
@@ -1056,78 +895,6 @@ mod tests {
     }
 
     #[test]
-    fn ruby_shorter_than_base_distributes_evenly() {
-        // A ruby line of 2 x 50 equals the base extent (100): one glyph per
-        // slot, with no offset.
-        let tops = distribute_ruby_tops(0.0, 100.0, 2, 50.0, RubyAlign::SpaceAround, (50.0, 50.0));
-        assert_eq!(tops.len(), 2);
-        assert!(
-            (tops[0] - 0.0).abs() < 0.001,
-            "first ruby glyph at slot start"
-        );
-        assert!(
-            (tops[1] - 50.0).abs() < 0.001,
-            "second ruby glyph one slot down"
-        );
-
-        // A wide base (extent 200) spreads 2 glyphs of advance 50 into slots
-        // of 100.
-        let spread =
-            distribute_ruby_tops(0.0, 200.0, 2, 50.0, RubyAlign::SpaceAround, (50.0, 50.0));
-        assert!(
-            (spread[0] - 25.0).abs() < 0.001,
-            "ruby glyph centred in its slot"
-        );
-        assert!(
-            (spread[1] - spread[0] - 100.0).abs() < 0.001,
-            "even distribution keeps a full slot between glyphs, not the advance"
-        );
-    }
-
-    #[test]
-    fn ruby_longer_than_base_overhangs_symmetrically() {
-        // A ruby line of 80 over a 40 base centres on the base, overhanging
-        // each end by 20 (the one-em cap).
-        let tops = distribute_ruby_tops(0.0, 40.0, 4, 20.0, RubyAlign::SpaceAround, (50.0, 50.0));
-        assert_eq!(tops.len(), 4);
-        assert!(tops[0] < 0.0, "long ruby overhangs above the base top");
-        let block_center = (tops[0] + tops[3] + 20.0) / 2.0;
-        assert!(
-            (block_center - 20.0).abs() < 0.001,
-            "the ruby block stays centred on the base"
-        );
-    }
-
-    #[test]
-    fn ruby_alignment_modes_control_short_annotation_distribution() {
-        assert_eq!(
-            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::SpaceAround, (4.0, 4.0),),
-            vec![3.0, 13.0]
-        );
-        assert_eq!(
-            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::Center, (4.0, 4.0)),
-            vec![6.0, 10.0]
-        );
-        assert_eq!(
-            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::Start, (4.0, 4.0)),
-            vec![0.0, 4.0]
-        );
-        assert_eq!(
-            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::SpaceBetween, (4.0, 4.0),),
-            vec![0.0, 16.0]
-        );
-    }
-
-    #[test]
-    fn ruby_overhang_none_keeps_long_annotation_at_base_start() {
-        let automatic = distribute_ruby_tops(0.0, 10.0, 4, 4.0, RubyAlign::Center, (4.0, 4.0));
-        let constrained = distribute_ruby_tops(0.0, 10.0, 4, 4.0, RubyAlign::Center, (0.0, 0.0));
-
-        assert_eq!(automatic, vec![-3.0, 1.0, 5.0, 9.0]);
-        assert_eq!(constrained, vec![0.0, 4.0, 8.0, 12.0]);
-    }
-
-    #[test]
     fn ruby_side_attaches_to_opposite_base_edges() {
         let column = VerticalColumn {
             x: 10.0,
@@ -1141,9 +908,27 @@ mod tests {
     }
 
     #[test]
+    fn long_ruby_spreads_a_vertical_base_with_half_gaps_at_the_ends() {
+        let plain = layout_content(&make_content(&["日本"], 1000.0), 1000.0);
+        let mut content = ruby_content("日本", "にほんごです", 1000.0);
+        content.paragraphs_mut()[0].children_mut()[0].ruby_overhang = RubyOverhang::None;
+        let layout = layout_content(&content, 1000.0);
+        // Six half-em ruby glyphs; what the base lacks is shared by its two
+        // characters.
+        let base: f32 = plain.cells.iter().map(|cell| cell.extent).sum();
+        let gap = (6.0 * EM / 2.0 - base) / 2.0;
+        assert!(gap > 0.0);
+        for (spread, solid) in layout.cells.iter().zip(&plain.cells) {
+            assert!((spread.extent - (solid.extent + gap)).abs() < 0.01);
+            assert!((spread.glyph_flow_shift - (solid.glyph_flow_shift + gap / 2.0)).abs() < 0.01);
+        }
+    }
+
+    #[test]
     fn ruby_base_spreading_expands_gap_for_long_reading() {
         let content = ruby_content("日本", "にほんご", 120.0);
         let layout = layout_content(&content, 120.0);
+        let plain = layout_content(&make_content(&["日本"], 120.0), 120.0);
         let ruby_cells: Vec<&VerticalCell> = layout
             .cells
             .iter()
@@ -1152,7 +937,7 @@ mod tests {
         assert_eq!(ruby_cells.len(), 2);
         let spacing = ruby_cells[1].top - ruby_cells[0].top;
         assert!(
-            spacing > 20.0,
+            spacing > plain.cells[1].top - plain.cells[0].top,
             "long ruby should spread the base characters apart, got {}",
             spacing
         );
@@ -1325,34 +1110,6 @@ mod tests {
         let base = layout.cells.iter().find(|cell| cell.span == 1).unwrap();
         assert!(ruby.glyph_tops[0] >= base.top - 0.01);
         assert!(ruby.glyph_tops.last().unwrap() + ruby.font_size <= base.top + base.extent + 0.01);
-    }
-
-    #[test]
-    fn ruby_overhang_room_allows_only_kana_without_ruby() {
-        assert_eq!(
-            ruby_overhang_room(RubyOverhang::Auto, Some('か'), false, 20.0, 10.0),
-            10.0
-        );
-        assert_eq!(
-            ruby_overhang_room(RubyOverhang::Auto, Some('か'), false, 12.0, 10.0),
-            6.0
-        );
-        assert_eq!(
-            ruby_overhang_room(RubyOverhang::Auto, Some('漢'), false, 20.0, 10.0),
-            0.0
-        );
-        assert_eq!(
-            ruby_overhang_room(RubyOverhang::Auto, Some('か'), true, 20.0, 10.0),
-            0.0
-        );
-        assert_eq!(
-            ruby_overhang_room(RubyOverhang::Auto, None, false, 20.0, 10.0),
-            0.0
-        );
-        assert_eq!(
-            ruby_overhang_room(RubyOverhang::None, Some('か'), false, 20.0, 10.0),
-            0.0
-        );
     }
 
     #[test]

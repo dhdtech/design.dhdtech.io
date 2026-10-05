@@ -127,7 +127,7 @@
   (vertical) or above/below it (horizontal), per its side and alignment."
   [shape data index ruby-font-size style]
   (let [key       (dm/str "ruby-" (:id shape) "-" index)
-        ruby-side (:ruby-side data "over")]
+        ruby-side (:ruby-side data (jl/enum-default :ruby-side))]
     (if (= "vertical-rl" (:writing-mode data))
       #js {:key key
            :x (if (= "under" ruby-side)
@@ -138,8 +138,8 @@
            :lengthAdjust "spacingAndGlyphs"
            :style style}
       (let [rtl?       (= "rtl" (:direction data))
-            ruby-align (:ruby-align data "space-around")
-            fit?       (or (= "none" (:ruby-overhang data "auto"))
+            ruby-align (:ruby-align data (jl/enum-default :ruby-align))
+            fit?       (or (= "none" (:ruby-overhang data (jl/enum-default :ruby-overhang)))
                            (= "space-around" ruby-align))]
         (cond-> #js {:key key
                      :x (if (= "center" ruby-align)

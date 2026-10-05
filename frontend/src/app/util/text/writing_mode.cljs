@@ -10,6 +10,7 @@
   out horizontally and leaves the stored attrs as they are."
   (:require
    [app.common.types.shape :as cts]
+   [app.common.types.text :as txt]
    [app.common.types.text.japanese-layout :as jl]))
 
 (defn vertical-layout-active?
@@ -36,3 +37,19 @@
   [content]
   (and (not ^boolean (vertical-layout-active?))
        (jl/vertical-text-content? content)))
+
+(defn renderable-paragraph
+  "Paragraph attrs as the active renderer lays them out: without the vertical
+  writing attrs when the renderer lays every text out horizontally."
+  [paragraph]
+  (if ^boolean (vertical-layout-active?)
+    paragraph
+    (apply dissoc paragraph jl/whole-shape-paragraph-attrs)))
+
+(defn renderable-content
+  "Text content as the active renderer lays it out (see
+  `renderable-paragraph`)."
+  [content]
+  (if ^boolean (vertical-layout-active?)
+    content
+    (txt/transform-nodes txt/is-paragraph-node? renderable-paragraph content)))

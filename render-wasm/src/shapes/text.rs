@@ -26,8 +26,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use super::text_horizontal::*;
 use super::text_japanese::*;
-use super::FontFamily;
+use super::{FontFamily, FontStyle};
 use crate::math::Point;
 use crate::shapes::{self, kinsoku, merge_fills, Shape, Type, VerticalAlign};
 use crate::utils::{get_fallback_fonts, get_font_collection};
@@ -1712,9 +1713,8 @@ impl Paragraph {
     /// Span texts as fed to the paragraph builders (text-transform applied,
     /// Japanese spacing normalized, kinsoku break suppressions inserted),
     /// plus the map from original to builder-text UTF-16 offsets. Consumers
-    /// of laid-out offsets must translate through the map. Skips the layout
-    /// transform under letter-spacing, where skparagraph would also space
-    /// the synthetic characters.
+    /// of laid-out offsets must translate through the map. Only paragraphs
+    /// with Japanese text or ruby are transformed.
     pub fn layout_span_texts(&self) -> (Vec<String>, kinsoku::OffsetMap) {
         layout_span_texts(self)
     }
@@ -1880,6 +1880,37 @@ pub struct TextSpan {
     pub span_position: u32,
 }
 
+impl Default for TextSpan {
+    fn default() -> Self {
+        Self {
+            text: String::default(),
+            font_family: FontFamily::new(Uuid::nil(), 400, FontStyle::Normal),
+            font_size: 14.0,
+            line_height: 1.2,
+            letter_spacing: 0.0,
+            font_weight: 400,
+            font_variant_id: Uuid::nil(),
+            text_decoration: None,
+            text_transform: None,
+            text_direction: TextDirection::LTR,
+            text_orientation: TextOrientation::default(),
+            text_combine_upright: TextCombineUpright::default(),
+            text_emphasis: TextEmphasis::default(),
+            ruby: String::default(),
+            ruby_size: RubySize::default(),
+            ruby_align: RubyAlign::default(),
+            ruby_overhang: RubyOverhang::default(),
+            ruby_side: RubySide::default(),
+            warichu: false,
+            font_features: FontFeatures::default(),
+            annotation_clearance: AnnotationClearance::default(),
+            fills: vec![],
+            paragraph_position: u32::MAX,
+            span_position: u32::MAX,
+        }
+    }
+}
+
 impl TextSpan {
     /// Fill at `layer` counting from the bottom (`0` = last / bottommost fill).
     pub fn fills_from_bottom(&self, layer: usize) -> Option<&shapes::Fill> {
@@ -1913,22 +1944,10 @@ impl TextSpan {
             text_decoration,
             text_transform,
             text_direction,
-            text_orientation: TextOrientation::default(),
-            text_combine_upright: TextCombineUpright::default(),
-            text_emphasis: TextEmphasis::default(),
-            ruby: String::default(),
-            ruby_size: RubySize::default(),
-            ruby_align: RubyAlign::default(),
-            ruby_overhang: RubyOverhang::default(),
-            ruby_side: RubySide::default(),
-            warichu: false,
-            font_features: FontFeatures::default(),
-            annotation_clearance: AnnotationClearance::default(),
             font_weight,
             font_variant_id,
             fills,
-            paragraph_position: u32::MAX,
-            span_position: u32::MAX,
+            ..Self::default()
         }
     }
 
@@ -1941,57 +1960,15 @@ impl TextSpan {
         self.span_position = span;
     }
 
-    pub fn set_ruby(&mut self, ruby: String) {
-        self.ruby = ruby;
-    }
-
-    pub fn set_ruby_size(&mut self, value: RubySize) {
-        self.ruby_size = value;
-    }
-
-    pub fn set_ruby_align(&mut self, value: RubyAlign) {
-        self.ruby_align = value;
-    }
-
-    pub fn set_ruby_overhang(&mut self, value: RubyOverhang) {
-        self.ruby_overhang = value;
-    }
-
-    pub fn set_ruby_side(&mut self, value: RubySide) {
-        self.ruby_side = value;
-    }
-
-    pub fn set_text_orientation(&mut self, text_orientation: TextOrientation) {
-        self.text_orientation = text_orientation;
-    }
-
-    pub fn set_text_combine_upright(&mut self, text_combine_upright: TextCombineUpright) {
-        self.text_combine_upright = text_combine_upright;
-    }
-
-    pub fn set_text_emphasis(&mut self, text_emphasis: TextEmphasis) {
-        self.text_emphasis = text_emphasis;
-    }
-
-    pub fn set_warichu(&mut self, warichu: bool) {
-        self.warichu = warichu;
-    }
-
-    pub fn set_font_features(&mut self, font_features: FontFeatures) {
-        self.font_features = font_features;
-    }
-
-    pub fn set_annotation_clearance(&mut self, clearance: AnnotationClearance) {
-        self.annotation_clearance = clearance;
-    }
-
     /// Ruby annotation text, without surrounding whitespace.
     pub fn ruby_text(&self) -> &str {
         self.ruby.trim()
     }
 
+    /// True when the span shows a reading. A warichu span shows none: the
+    /// note replaces the base text, so a reading has nothing to annotate.
     pub fn has_ruby(&self) -> bool {
-        !self.ruby_text().is_empty()
+        !self.warichu && !self.ruby_text().is_empty()
     }
 
     pub fn ruby_font_size(&self) -> f32 {
@@ -2292,110 +2269,17 @@ pub fn calculate_text_layout_data(
     if !skip_position_data {
         for para_layout in &paragraph_layouts {
             let paragraph_index = para_layout.source_paragraph;
-            let current_y = para_layout.y;
-            let text_paragraph = text_paragraphs.get(paragraph_index);
-            if let (Some(text_para), Some(plan)) = (text_paragraph, plans.get(paragraph_index)) {
-                // Ranges are in builder-text (kinsoku-shifted) space; the
-                // map translates exported positions back to span offsets.
-                let offsets = &plan.offsets;
-                let offset_map = &offsets.offset_map;
-                let entry =
-                    |span: usize, range: std::ops::Range<usize>, mut rect: Rect, direction| {
-                        rect.offset((x, current_y));
-                        PositionData {
-                            paragraph: paragraph_index as u32,
-                            span: span as u32,
-                            start_pos: range.start as u32,
-                            end_pos: range.end as u32,
-                            x: rect.x(),
-                            y: rect.y(),
-                            width: rect.width(),
-                            height: rect.height(),
-                            direction,
-                        }
-                    };
-                // Tabs are placeholders too; this keys warichu boxes by span.
-                let warichu_rects = super::text_japanese::horizontal_warichu_placeholders(
-                    text_para,
-                    &para_layout.paragraph,
-                );
-                for range in &offsets.ranges {
-                    if range.warichu {
-                        // One strip per sub-line: the top half holds the
-                        // first line, the bottom half the second.
-                        let warichu_rect = warichu_rects
-                            .iter()
-                            .find(|(span, _)| *span == range.span)
-                            .map(|(_, rect)| *rect);
-                        if let (Some(rect), Some(span)) =
-                            (warichu_rect, text_para.children().get(range.span))
-                        {
-                            let text = span.apply_text_transform();
-                            let split = warichu_text_lines(&text).0.encode_utf16().count();
-                            let end = range.source_end - range.source_start;
-                            let half = rect.height() / 2.0;
-                            let ltr = direction_to_int(TextDirection::LTR);
-                            let top = Rect::from_xywh(rect.x(), rect.y(), rect.width(), half);
-                            let bottom =
-                                Rect::from_xywh(rect.x(), rect.y() + half, rect.width(), half);
-                            position_data.push(entry(range.span, 0..split, top, ltr));
-                            position_data.push(entry(range.span, split..end, bottom, ltr));
-                        }
-                        continue;
-                    }
-                    let orig_span_start = range.source_start;
-                    let rects = para_layout.paragraph.get_rects_for_range(
-                        range.builder_start..range.builder_end,
-                        RectHeightStyle::Tight,
-                        RectWidthStyle::Tight,
-                    );
-
-                    for textbox in rects {
-                        let direction = textbox.direct;
-                        let rect = textbox.rect;
-                        let cy = rect.top + rect.height() / 2.0;
-
-                        // Get byte positions from Skia's transformed text layout
-                        let to_source = |builder_position: usize| {
-                            let within = builder_position
-                                .saturating_sub(range.builder_start)
-                                .min(range.builder_end - range.builder_start);
-                            offset_map.to_original(range.shifted_start + within)
-                        };
-                        let start_pos = to_source(
-                            para_layout
-                                .paragraph
-                                .get_glyph_position_at_coordinate((rect.left + 0.1, cy))
-                                .position as usize,
-                        ) - orig_span_start;
-
-                        let end_pos = to_source(
-                            para_layout
-                                .paragraph
-                                .get_glyph_position_at_coordinate((rect.right - 0.1, cy))
-                                .position as usize,
-                        ) - orig_span_start;
-
-                        position_data.push(entry(
-                            range.span,
-                            start_pos..end_pos,
-                            rect,
-                            direction_to_int(direction),
-                        ));
-                    }
-                }
-                for placement in
-                    horizontal_emphasis_placements(text_para, offsets, &para_layout.paragraph)
-                {
-                    if let Some(span) = text_para.children().get(placement.span) {
-                        position_data.push(entry(
-                            placement.span,
-                            placement.range.clone(),
-                            horizontal_emphasis_mark_box(span, &placement),
-                            super::text_vertical::DIRECTION_EMPHASIS_MARK,
-                        ));
-                    }
-                }
+            if let (Some(text_para), Some(plan)) = (
+                text_paragraphs.get(paragraph_index),
+                plans.get(paragraph_index),
+            ) {
+                let entries = HorizontalPositionEntries {
+                    paragraph_index,
+                    paragraph: text_para,
+                    offsets: &plan.offsets,
+                    layout: para_layout,
+                };
+                position_data.extend(entries.collect());
             }
         }
     }
@@ -2403,6 +2287,133 @@ pub fn calculate_text_layout_data(
     TextLayoutData {
         position_data,
         paragraphs: paragraph_layouts,
+    }
+}
+
+/// Position data of one laid-out horizontal paragraph: strips of the spans
+/// outside warichu, one strip per warichu sub-line, and one box per
+/// emphasis mark.
+struct HorizontalPositionEntries<'a> {
+    paragraph_index: usize,
+    paragraph: &'a Paragraph,
+    /// Ranges in builder-text (kinsoku-shifted) space; the map translates
+    /// exported positions back to span offsets.
+    offsets: &'a HorizontalOffsets,
+    layout: &'a ParagraphLayout,
+}
+
+impl HorizontalPositionEntries<'_> {
+    fn collect(&self) -> Vec<PositionData> {
+        let mut entries = Vec::new();
+        // Tabs are placeholders too; this keys warichu boxes by span.
+        let warichu_rects = super::text_horizontal::horizontal_warichu_placeholders(
+            self.paragraph,
+            &self.layout.paragraph,
+        );
+        for range in &self.offsets.ranges {
+            if range.warichu {
+                let rect = warichu_rects
+                    .iter()
+                    .find(|(span, _)| *span == range.span)
+                    .map(|(_, rect)| *rect);
+                if let Some(rect) = rect {
+                    entries.extend(self.warichu_entries(range, rect));
+                }
+            } else {
+                entries.extend(self.span_entries(range));
+            }
+        }
+        for placement in
+            horizontal_emphasis_placements(self.paragraph, self.offsets, &self.layout.paragraph)
+        {
+            if let Some(span) = self.paragraph.children().get(placement.span) {
+                entries.push(self.entry(
+                    placement.span,
+                    placement.range.clone(),
+                    horizontal_emphasis_mark_box(span, &placement),
+                    super::text_vertical::DIRECTION_EMPHASIS_MARK,
+                ));
+            }
+        }
+        entries
+    }
+
+    /// An entry for `range` of `span`, with `rect` in the laid-out paragraph.
+    fn entry(
+        &self,
+        span: usize,
+        range: std::ops::Range<usize>,
+        mut rect: Rect,
+        direction: u32,
+    ) -> PositionData {
+        rect.offset((self.layout.x, self.layout.y));
+        PositionData {
+            paragraph: self.paragraph_index as u32,
+            span: span as u32,
+            start_pos: range.start as u32,
+            end_pos: range.end as u32,
+            x: rect.x(),
+            y: rect.y(),
+            width: rect.width(),
+            height: rect.height(),
+            direction,
+        }
+    }
+
+    /// One strip per warichu sub-line: the top half of the placeholder holds
+    /// the first line, the bottom half the second.
+    fn warichu_entries(&self, range: &HorizontalSpanRange, rect: Rect) -> Vec<PositionData> {
+        let Some(span) = self.paragraph.children().get(range.span) else {
+            return Vec::new();
+        };
+        let text = span.apply_text_transform();
+        let split = warichu_text_lines(&text).0.encode_utf16().count();
+        let end = range.source_end - range.source_start;
+        let half = rect.height() / 2.0;
+        let ltr = direction_to_int(TextDirection::LTR);
+        let top = Rect::from_xywh(rect.x(), rect.y(), rect.width(), half);
+        let bottom = Rect::from_xywh(rect.x(), rect.y() + half, rect.width(), half);
+        vec![
+            self.entry(range.span, 0..split, top, ltr),
+            self.entry(range.span, split..end, bottom, ltr),
+        ]
+    }
+
+    /// One strip per laid-out rect of a span, with its source offsets read
+    /// from the glyphs at the rect's edges.
+    fn span_entries(&self, range: &HorizontalSpanRange) -> Vec<PositionData> {
+        let laid_out = &self.layout.paragraph;
+        let to_span_offset = |builder_position: usize| {
+            let within = builder_position
+                .saturating_sub(range.builder_start)
+                .min(range.builder_end - range.builder_start);
+            self.offsets
+                .offset_map
+                .to_original(range.shifted_start + within)
+                - range.source_start
+        };
+        laid_out
+            .get_rects_for_range(
+                range.builder_start..range.builder_end,
+                RectHeightStyle::Tight,
+                RectWidthStyle::Tight,
+            )
+            .into_iter()
+            .map(|textbox| {
+                let rect = textbox.rect;
+                let cy = rect.top + rect.height() / 2.0;
+                let position_at =
+                    |x: f32| laid_out.get_glyph_position_at_coordinate((x, cy)).position as usize;
+                let start_pos = to_span_offset(position_at(rect.left + 0.1));
+                let end_pos = to_span_offset(position_at(rect.right - 0.1));
+                self.entry(
+                    range.span,
+                    start_pos..end_pos,
+                    rect,
+                    direction_to_int(textbox.direct),
+                )
+            })
+            .collect()
     }
 }
 
@@ -2442,6 +2453,19 @@ pub fn calculate_position_data(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warichu_span_shows_no_ruby_and_reserves_no_room_for_it() {
+        let span = TextSpan {
+            text: "割注".to_string(),
+            ruby: "よみ".to_string(),
+            warichu: true,
+            annotation_clearance: AnnotationClearance::Auto,
+            ..TextSpan::default()
+        };
+        assert!(!span.has_ruby());
+        assert_eq!(span.annotation_room_em(), 0.0);
+    }
 
     #[test]
     fn vertical_align_top_keeps_the_content_at_the_origin() {

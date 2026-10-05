@@ -33,17 +33,6 @@
 (def ^:private text-direction-re #"ltr|rtl")
 (def ^:private text-align-re #"left|center|right|justify")
 (def ^:private vertical-align-re #"top|center|bottom")
-(def ^:private writing-mode-re #"horizontal-tb|vertical-rl")
-(def ^:private text-orientation-re #"mixed|upright")
-(def ^:private text-combine-upright-re #"none|all|digits2|digits3|digits")
-(def ^:private text-emphasis-re #"none|filled-dot|open-dot|filled-circle|open-circle|filled-sesame|open-sesame")
-(def ^:private warichu-re #"none|warichu")
-(def ^:private font-features-re #"none|palt|vpal")
-(def ^:private annotation-clearance-re #"none|auto")
-(def ^:private ruby-size-re #"half|third|quarter")
-(def ^:private ruby-align-re #"space-around|center|start|space-between")
-(def ^:private ruby-overhang-re #"auto|none")
-(def ^:private ruby-side-re #"over|under")
 
 (defn- font-data
   [font variant]
@@ -118,9 +107,9 @@
 
 (defn- whole-shape-value
   "Value of a whole-shape paragraph `attr` (writing mode, orientation): the
-   first paragraph's, which every paragraph shares, or `default`."
-  [shape-proxy attr default]
-  (-> shape-proxy u/proxy->shape :content (dm/get-in [:children 0 :children 0 attr]) (d/nilv default)))
+   first paragraph's, which every paragraph shares, or the default."
+  [shape-proxy attr]
+  (-> shape-proxy u/proxy->shape :content (jl/whole-shape-attr attr) (d/nilv (jl/enum-default attr))))
 
 (defn- range-japanese-value
   "Value of a Japanese span `attr` over a text range proxy's characters."
@@ -131,10 +120,10 @@
          (u/mixed-value))))
 
 (defn- enum-value?
-  "Validator accepting the strings fully matched by `re`."
-  [re]
+  "Validator accepting the values of the Japanese layout enum `attr`."
+  [attr]
   (fn [value]
-    (and (string? value) (some? (re-matches re value)))))
+    (jl/valid-enum-value? attr value)))
 
 (defn- optional-string?
   [value]
@@ -476,27 +465,27 @@
     :fontFeatures
     {:this true
      :get (fn [self] (range-japanese-value self start end :font-features))
-     :set (range-attr-setter plugin-id page-id id start end :fontFeatures :font-features (enum-value? font-features-re))}
+     :set (range-attr-setter plugin-id page-id id start end :fontFeatures :font-features (enum-value? :font-features))}
 
     :textCombineUpright
     {:this true
      :get (fn [self] (range-japanese-value self start end :text-combine-upright))
-     :set (range-attr-setter plugin-id page-id id start end :textCombineUpright :text-combine-upright (enum-value? text-combine-upright-re))}
+     :set (range-attr-setter plugin-id page-id id start end :textCombineUpright :text-combine-upright (enum-value? :text-combine-upright))}
 
     :textEmphasis
     {:this true
      :get (fn [self] (range-japanese-value self start end :text-emphasis))
-     :set (range-attr-setter plugin-id page-id id start end :textEmphasis :text-emphasis (enum-value? text-emphasis-re))}
+     :set (range-attr-setter plugin-id page-id id start end :textEmphasis :text-emphasis (enum-value? :text-emphasis))}
 
     :warichu
     {:this true
      :get (fn [self] (range-japanese-value self start end :warichu))
-     :set (range-annotation-setter plugin-id page-id id start end :warichu :warichu (enum-value? warichu-re))}
+     :set (range-annotation-setter plugin-id page-id id start end :warichu :warichu (enum-value? :warichu))}
 
     :annotationClearance
     {:this true
      :get (fn [self] (range-japanese-value self start end :annotation-clearance))
-     :set (range-attr-setter plugin-id page-id id start end :annotationClearance :annotation-clearance (enum-value? annotation-clearance-re))}
+     :set (range-attr-setter plugin-id page-id id start end :annotationClearance :annotation-clearance (enum-value? :annotation-clearance))}
 
     :ruby
     {:this true
@@ -511,22 +500,22 @@
     :rubySize
     {:this true
      :get (fn [self] (range-japanese-value self start end :ruby-size))
-     :set (range-attr-setter plugin-id page-id id start end :rubySize :ruby-size (enum-value? ruby-size-re))}
+     :set (range-attr-setter plugin-id page-id id start end :rubySize :ruby-size (enum-value? :ruby-size))}
 
     :rubyAlign
     {:this true
      :get (fn [self] (range-japanese-value self start end :ruby-align))
-     :set (range-attr-setter plugin-id page-id id start end :rubyAlign :ruby-align (enum-value? ruby-align-re))}
+     :set (range-attr-setter plugin-id page-id id start end :rubyAlign :ruby-align (enum-value? :ruby-align))}
 
     :rubyOverhang
     {:this true
      :get (fn [self] (range-japanese-value self start end :ruby-overhang))
-     :set (range-attr-setter plugin-id page-id id start end :rubyOverhang :ruby-overhang (enum-value? ruby-overhang-re))}
+     :set (range-attr-setter plugin-id page-id id start end :rubyOverhang :ruby-overhang (enum-value? :ruby-overhang))}
 
     :rubySide
     {:this true
      :get (fn [self] (range-japanese-value self start end :ruby-side))
-     :set (range-attr-setter plugin-id page-id id start end :rubySide :ruby-side (enum-value? ruby-side-re))}
+     :set (range-attr-setter plugin-id page-id id start end :rubySide :ruby-side (enum-value? :ruby-side))}
 
     :direction
     {:this true
@@ -923,32 +912,32 @@
             (st/emit! (dwt/update-attrs id {:vertical-align value})))))}
 
      {:name "writingMode"
-      :get #(whole-shape-value % :writing-mode "horizontal-tb")
-      :set (shape-attr-setter plugin-id page-id :writingMode :writing-mode (enum-value? writing-mode-re))}
+      :get #(whole-shape-value % :writing-mode)
+      :set (shape-attr-setter plugin-id page-id :writingMode :writing-mode (enum-value? :writing-mode))}
 
      {:name "textOrientation"
-      :get #(whole-shape-value % :text-orientation "mixed")
-      :set (shape-attr-setter plugin-id page-id :textOrientation :text-orientation (enum-value? text-orientation-re))}
+      :get #(whole-shape-value % :text-orientation)
+      :set (shape-attr-setter plugin-id page-id :textOrientation :text-orientation (enum-value? :text-orientation))}
 
      {:name "textCombineUpright"
       :get #(shape-japanese-value % :text-combine-upright)
-      :set (shape-attr-setter plugin-id page-id :textCombineUpright :text-combine-upright (enum-value? text-combine-upright-re))}
+      :set (shape-attr-setter plugin-id page-id :textCombineUpright :text-combine-upright (enum-value? :text-combine-upright))}
 
      {:name "textEmphasis"
       :get #(shape-japanese-value % :text-emphasis)
-      :set (shape-attr-setter plugin-id page-id :textEmphasis :text-emphasis (enum-value? text-emphasis-re))}
+      :set (shape-attr-setter plugin-id page-id :textEmphasis :text-emphasis (enum-value? :text-emphasis))}
 
      {:name "warichu"
       :get #(shape-japanese-value % :warichu)
-      :set (shape-annotation-setter plugin-id page-id :warichu :warichu (enum-value? warichu-re))}
+      :set (shape-annotation-setter plugin-id page-id :warichu :warichu (enum-value? :warichu))}
 
      {:name "fontFeatures"
       :get #(shape-japanese-value % :font-features)
-      :set (shape-attr-setter plugin-id page-id :fontFeatures :font-features (enum-value? font-features-re))}
+      :set (shape-attr-setter plugin-id page-id :fontFeatures :font-features (enum-value? :font-features))}
 
      {:name "annotationClearance"
       :get #(shape-japanese-value % :annotation-clearance)
-      :set (shape-attr-setter plugin-id page-id :annotationClearance :annotation-clearance (enum-value? annotation-clearance-re))}
+      :set (shape-attr-setter plugin-id page-id :annotationClearance :annotation-clearance (enum-value? :annotation-clearance))}
 
      {:name "ruby"
       :get #(shape-japanese-value % :ruby)
@@ -960,19 +949,19 @@
 
      {:name "rubySize"
       :get #(shape-japanese-value % :ruby-size)
-      :set (shape-attr-setter plugin-id page-id :rubySize :ruby-size (enum-value? ruby-size-re))}
+      :set (shape-attr-setter plugin-id page-id :rubySize :ruby-size (enum-value? :ruby-size))}
 
      {:name "rubyAlign"
       :get #(shape-japanese-value % :ruby-align)
-      :set (shape-attr-setter plugin-id page-id :rubyAlign :ruby-align (enum-value? ruby-align-re))}
+      :set (shape-attr-setter plugin-id page-id :rubyAlign :ruby-align (enum-value? :ruby-align))}
 
      {:name "rubyOverhang"
       :get #(shape-japanese-value % :ruby-overhang)
-      :set (shape-attr-setter plugin-id page-id :rubyOverhang :ruby-overhang (enum-value? ruby-overhang-re))}
+      :set (shape-attr-setter plugin-id page-id :rubyOverhang :ruby-overhang (enum-value? :ruby-overhang))}
 
      {:name "rubySide"
       :get #(shape-japanese-value % :ruby-side)
-      :set (shape-attr-setter plugin-id page-id :rubySide :ruby-side (enum-value? ruby-side-re))}
+      :set (shape-attr-setter plugin-id page-id :rubySide :ruby-side (enum-value? :ruby-side))}
 
      {:name "textBounds"
       :get #(-> % u/proxy->shape gst/shape->bounds format/format-geom-rect)})))

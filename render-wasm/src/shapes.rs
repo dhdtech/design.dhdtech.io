@@ -30,6 +30,7 @@ mod strokes;
 mod svg_attrs;
 mod svgraw;
 mod text;
+mod text_horizontal;
 mod text_japanese;
 pub mod text_paths;
 pub mod text_vertical;
@@ -54,6 +55,7 @@ pub use strokes::*;
 pub use svg_attrs::*;
 pub use svgraw::*;
 pub use text::*;
+pub(crate) use text_horizontal::*;
 pub use text_japanese::*;
 pub use transform::*;
 

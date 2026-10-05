@@ -4,13 +4,30 @@ use crate::shapes::{
 };
 use macros::ToJs;
 
+/// Reads a style byte as `$raw`, falling back to `$default` when the byte
+/// names no variant, so a bad byte from the CLJS writer never becomes an
+/// invalid enum value.
+macro_rules! raw_enum_from_byte {
+    ($raw:ident, $default:ident, [$($variant:ident),+ $(,)?]) => {
+        impl From<u8> for $raw {
+            fn from(value: u8) -> Self {
+                [$($raw::$variant),+]
+                    .into_iter()
+                    .find(|variant| *variant as u8 == value)
+                    .unwrap_or($raw::$default)
+            }
+        }
+    };
+}
+
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawWritingMode {
     HorizontalTb = 0,
     VerticalRl = 1,
 }
+
+raw_enum_from_byte!(RawWritingMode, HorizontalTb, [HorizontalTb, VerticalRl]);
 
 impl From<RawWritingMode> for shapes::WritingMode {
     fn from(value: RawWritingMode) -> Self {
@@ -23,11 +40,12 @@ impl From<RawWritingMode> for shapes::WritingMode {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawTextOrientation {
     Mixed = 0,
     Upright = 1,
 }
+
+raw_enum_from_byte!(RawTextOrientation, Mixed, [Mixed, Upright]);
 
 impl From<RawTextOrientation> for shapes::TextOrientation {
     fn from(value: RawTextOrientation) -> Self {
@@ -40,7 +58,6 @@ impl From<RawTextOrientation> for shapes::TextOrientation {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawTextCombineUpright {
     None = 0,
     All = 1,
@@ -48,6 +65,12 @@ pub enum RawTextCombineUpright {
     Digits2 = 3,
     Digits3 = 4,
 }
+
+raw_enum_from_byte!(
+    RawTextCombineUpright,
+    None,
+    [None, All, Digits, Digits2, Digits3]
+);
 
 impl From<RawTextCombineUpright> for TextCombineUpright {
     fn from(value: RawTextCombineUpright) -> Self {
@@ -63,7 +86,6 @@ impl From<RawTextCombineUpright> for TextCombineUpright {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawTextEmphasis {
     None = 0,
     FilledDot = 1,
@@ -73,6 +95,20 @@ pub enum RawTextEmphasis {
     FilledSesame = 5,
     OpenSesame = 6,
 }
+
+raw_enum_from_byte!(
+    RawTextEmphasis,
+    None,
+    [
+        None,
+        FilledDot,
+        OpenDot,
+        FilledCircle,
+        OpenCircle,
+        FilledSesame,
+        OpenSesame
+    ]
+);
 
 impl From<RawTextEmphasis> for TextEmphasis {
     fn from(value: RawTextEmphasis) -> Self {
@@ -90,11 +126,12 @@ impl From<RawTextEmphasis> for TextEmphasis {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawWarichu {
     None = 0,
     Warichu = 1,
 }
+
+raw_enum_from_byte!(RawWarichu, None, [None, Warichu]);
 
 impl From<RawWarichu> for bool {
     fn from(value: RawWarichu) -> Self {
@@ -104,12 +141,13 @@ impl From<RawWarichu> for bool {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawFontFeatures {
     None = 0,
     Palt = 1,
     Vpal = 2,
 }
+
+raw_enum_from_byte!(RawFontFeatures, None, [None, Palt, Vpal]);
 
 impl From<RawFontFeatures> for FontFeatures {
     fn from(value: RawFontFeatures) -> Self {
@@ -123,11 +161,12 @@ impl From<RawFontFeatures> for FontFeatures {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawAnnotationClearance {
     None = 0,
     Auto = 1,
 }
+
+raw_enum_from_byte!(RawAnnotationClearance, None, [None, Auto]);
 
 impl From<RawAnnotationClearance> for AnnotationClearance {
     fn from(value: RawAnnotationClearance) -> Self {
@@ -140,12 +179,13 @@ impl From<RawAnnotationClearance> for AnnotationClearance {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawRubySize {
     Half = 0,
     Third = 1,
     Quarter = 2,
 }
+
+raw_enum_from_byte!(RawRubySize, Half, [Half, Third, Quarter]);
 
 impl From<RawRubySize> for RubySize {
     fn from(value: RawRubySize) -> Self {
@@ -159,13 +199,18 @@ impl From<RawRubySize> for RubySize {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawRubyAlign {
     SpaceAround = 0,
     Center = 1,
     Start = 2,
     SpaceBetween = 3,
 }
+
+raw_enum_from_byte!(
+    RawRubyAlign,
+    SpaceAround,
+    [SpaceAround, Center, Start, SpaceBetween]
+);
 
 impl From<RawRubyAlign> for RubyAlign {
     fn from(value: RawRubyAlign) -> Self {
@@ -180,11 +225,12 @@ impl From<RawRubyAlign> for RubyAlign {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawRubyOverhang {
     Auto = 0,
     None = 1,
 }
+
+raw_enum_from_byte!(RawRubyOverhang, Auto, [Auto, None]);
 
 impl From<RawRubyOverhang> for RubyOverhang {
     fn from(value: RawRubyOverhang) -> Self {
@@ -197,11 +243,12 @@ impl From<RawRubyOverhang> for RubyOverhang {
 
 #[derive(Debug, PartialEq, Clone, Copy, ToJs)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum RawRubySide {
     Over = 0,
     Under = 1,
 }
+
+raw_enum_from_byte!(RawRubySide, Over, [Over, Under]);
 
 impl From<RawRubySide> for RubySide {
     fn from(value: RawRubySide) -> Self {

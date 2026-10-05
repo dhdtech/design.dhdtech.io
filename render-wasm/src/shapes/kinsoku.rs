@@ -50,6 +50,12 @@ impl OffsetMap {
         self.inserted.is_empty()
     }
 
+    /// True when the character at a shifted offset was inserted by the
+    /// transform.
+    pub fn is_inserted(&self, shifted: usize) -> bool {
+        self.inserted.binary_search(&shifted).is_ok()
+    }
+
     /// Original offset for a shifted offset. An offset on an inserted
     /// character resolves to the boundary where it was inserted.
     pub fn to_original(&self, shifted: usize) -> usize {

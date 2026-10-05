@@ -11,19 +11,20 @@ use crate::math::Rect;
 use crate::shapes::japanese::JapaneseClass;
 use crate::shapes::text_japanese::EMPHASIS_FONT_SCALE;
 use crate::shapes::{
-    merge_fills, AppliedTextTransform, GrowType, Paragraph, RubySide, TextAlign, TextContent,
-    TextSpan, VerticalAlign,
+    merge_fills, AppliedTextTransform, FontFeatures, GrowType, Paragraph, RubySide, TextAlign,
+    TextContent, TextSpan, VerticalAlign,
 };
 use crate::utils::get_fallback_fonts;
 
 use super::annotations::{
     grow_ruby_bases, layout_emphasis, layout_ruby, ruby_base_units, ruby_rooms,
-    set_ruby_overhang_rooms, spread_ruby_base_cells, EmphasisMark, RubyCell, RubyRooms,
+    set_ruby_overhang_rooms, spread_ruby_base_cells, EmphasisMark, RubyBaseUnit, RubyCell,
+    RubyRooms,
 };
 use super::cells::{Fonts, SpanCells, WarichuNote};
 use super::flow::{
-    align_offset_along_column, apply_inter_script_spacing, apply_ordered_oikomi, flow_classes,
-    is_bounded, materialize_explicit_pair_spacing, ordered_expansion_offsets,
+    aki_classes, align_offset_along_column, apply_inter_script_spacing, apply_ordered_oikomi,
+    flow_classes, is_bounded, materialize_explicit_pair_spacing, ordered_expansion_offsets,
     plan_with_edge_trimming, preferred_pair_spacing, shed_punctuation_aki, FlowCell, FIT_TOLERANCE,
 };
 use super::paint::LayoutDraws;
@@ -128,18 +129,70 @@ pub struct VerticalLayout {
     pub emphasis_marks: Vec<EmphasisMark>,
     /// Per paragraph: [start, end) range into `columns`.
     pub paragraph_columns: Vec<(usize, usize)>,
-    /// Per paragraph: UTF-16 start offset of each span (paragraph-relative).
-    pub span_utf16_starts: Vec<Vec<usize>>,
-    /// Per paragraph: source UTF-16 start offset of each span.
-    pub span_source_utf16_starts: Vec<Vec<usize>>,
-    /// Per paragraph and span: transformed scalar ownership in source text.
-    pub span_transforms: Vec<Vec<AppliedTextTransform>>,
-    /// Per paragraph: UTF-16 offset of each scalar boundary, for editor positions.
-    pub paragraph_utf16_boundaries: Vec<Vec<usize>>,
+    /// Text offsets of each paragraph.
+    pub text_maps: Vec<ParagraphTextMap>,
     pub width: f32,
     pub height: f32,
     /// Glyph draws, built on the first paint.
     pub(super) draws: OnceCell<LayoutDraws>,
+}
+
+/// Text offsets of one laid-out paragraph, which map cells back to the
+/// source text.
+pub struct ParagraphTextMap {
+    /// Transformed text of each span, with its source ownership.
+    pub span_transforms: Vec<AppliedTextTransform>,
+    /// UTF-16 start of each span in the paragraph's transformed text.
+    pub span_starts: Vec<usize>,
+    /// UTF-16 start of each span in the paragraph's source text.
+    pub span_source_starts: Vec<usize>,
+    /// UTF-16 offset of each scalar boundary of the transformed text, for
+    /// editor positions.
+    pub utf16_boundaries: Vec<usize>,
+}
+
+impl ParagraphTextMap {
+    fn new(paragraph: &Paragraph) -> Self {
+        let span_transforms: Vec<AppliedTextTransform> = paragraph
+            .children()
+            .iter()
+            .map(TextSpan::apply_text_transform_with_source_ranges)
+            .collect();
+        let span_starts = running_starts(
+            span_transforms
+                .iter()
+                .map(|transform| transform.text.encode_utf16().count()),
+        );
+        let span_source_starts = running_starts(
+            paragraph
+                .children()
+                .iter()
+                .map(|span| span.text.encode_utf16().count()),
+        );
+        let mut utf16_boundaries = vec![0usize];
+        let mut offset = 0usize;
+        for character in span_transforms.iter().flat_map(|span| span.text.chars()) {
+            offset += character.len_utf16();
+            utf16_boundaries.push(offset);
+        }
+        Self {
+            span_transforms,
+            span_starts,
+            span_source_starts,
+            utf16_boundaries,
+        }
+    }
+}
+
+/// Start of each item when items of `lengths` follow one another.
+fn running_starts(lengths: impl Iterator<Item = usize>) -> Vec<usize> {
+    lengths
+        .scan(0usize, |offset, length| {
+            let start = *offset;
+            *offset += length;
+            Some(start)
+        })
+        .collect()
 }
 
 impl VerticalLayout {
@@ -254,11 +307,9 @@ enum FlowSegment {
 /// shaped up front; each plan only reshapes the notes.
 struct ParagraphCells<'a> {
     paragraph: &'a Paragraph,
-    transforms: &'a [AppliedTextTransform],
+    text_map: &'a ParagraphTextMap,
     segments: Vec<FlowSegment>,
     notes: Vec<WarichuNote<'a>>,
-    /// UTF-16 start of every span in the paragraph's layout text.
-    span_starts: Vec<usize>,
 }
 
 impl<'a> ParagraphCells<'a> {
@@ -268,26 +319,27 @@ impl<'a> ParagraphCells<'a> {
         fonts: &'a Fonts,
         paragraph_index: usize,
         paragraph: &'a Paragraph,
-        transforms: &'a [AppliedTextTransform],
+        text_map: &'a ParagraphTextMap,
         bounds: Rect,
         runs: &mut Vec<ShapedRun>,
         paints: &mut Vec<skia::Paint>,
     ) -> Self {
         let mut segments = Vec::new();
         let mut notes: Vec<WarichuNote<'a>> = Vec::new();
-        let mut span_starts = Vec::with_capacity(transforms.len());
         let mut note_members = Vec::new();
-        let mut offset = 0usize;
         let mut flush_note = |members: &mut Vec<_>, segments: &mut Vec<FlowSegment>| {
             if !members.is_empty() {
                 segments.push(FlowSegment::Note(notes.len()));
                 notes.push(WarichuNote::new(std::mem::take(members)));
             }
         };
-        for (span_index, (span, transform)) in
-            paragraph.children().iter().zip(transforms).enumerate()
+        for (span_index, (span, transform)) in paragraph
+            .children()
+            .iter()
+            .zip(&text_map.span_transforms)
+            .enumerate()
         {
-            span_starts.push(offset);
+            let offset = text_map.span_starts[span_index];
             if transform.text.is_empty() {
                 continue;
             }
@@ -308,15 +360,13 @@ impl<'a> ParagraphCells<'a> {
                 span_cells.push(&transform.text, runs, &mut cells);
                 segments.push(FlowSegment::Shaped(cells));
             }
-            offset += transform.text.encode_utf16().count();
         }
         flush_note(&mut note_members, &mut segments);
         Self {
             paragraph,
-            transforms,
+            text_map,
             segments,
             notes,
-            span_starts,
         }
     }
 
@@ -331,7 +381,7 @@ impl<'a> ParagraphCells<'a> {
                 FlowSegment::Note(note) => self.notes[*note].push(warichu_splits, runs, &mut flow),
             }
         }
-        keep_transform_expansions_together(&mut flow, self.transforms, &self.span_starts);
+        keep_transform_expansions_together(&mut flow, self.text_map);
         keep_ruby_bases_together(&mut flow, self.paragraph);
         flow
     }
@@ -400,14 +450,10 @@ fn warichu_overflows(
 /// A CSS transform may expand one source character into several cells
 /// (`ß` -> `SS`). Keep them in one column so the SVG fallback renders each
 /// source slice once.
-fn keep_transform_expansions_together(
-    flow: &mut [FlowCell],
-    transforms: &[AppliedTextTransform],
-    span_starts: &[usize],
-) {
+fn keep_transform_expansions_together(flow: &mut [FlowCell], text_map: &ParagraphTextMap) {
     let source_range = |cell: &VerticalCell| {
-        let start = span_starts[cell.span];
-        transforms[cell.span].source_utf16_range(cell.start - start..cell.end - start)
+        let start = text_map.span_starts[cell.span];
+        text_map.span_transforms[cell.span].source_utf16_range(cell.start - start..cell.end - start)
     };
     for index in 1..flow.len() {
         let (previous, current) = (&flow[index - 1].cell, &flow[index].cell);
@@ -466,6 +512,131 @@ fn aligned_tops(
         .collect()
 }
 
+/// A paragraph's flow after spacing and column planning.
+struct PlannedParagraph {
+    flow: Vec<FlowCell>,
+    ruby_units: Vec<RubyBaseUnit>,
+    classes: Vec<Option<JapaneseClass>>,
+    pair_spacing_em: Vec<f32>,
+    /// (column, offset from the column top) of each flow cell.
+    placements: Vec<(usize, f32)>,
+}
+
+impl PlannedParagraph {
+    /// Plans the flow, then breaks the first warichu piece that does not fit
+    /// where it starts and plans again, until every piece fits. Note runs go
+    /// to the end of `runs`.
+    fn new(
+        cells: &ParagraphCells,
+        fonts: &Fonts,
+        max_height: f32,
+        runs: &mut Vec<ShapedRun>,
+    ) -> Self {
+        let spans = cells.paragraph.children();
+        let ruby_spans: Vec<bool> = spans.iter().map(TextSpan::has_ruby).collect();
+        let vpal_spans: Vec<bool> = spans
+            .iter()
+            .map(|span| span.font_features == FontFeatures::Vpal)
+            .collect();
+        let ruby_units = ruby_base_units(
+            cells.paragraph,
+            &cells.text_map.span_transforms,
+            &cells.text_map.span_starts,
+            fonts,
+        );
+        let run_mark = runs.len();
+        let mut warichu_splits: Vec<usize> = Vec::new();
+        loop {
+            runs.truncate(run_mark);
+            let mut flow = cells.flow(&warichu_splits, runs);
+            let mut ruby_units = ruby_units.clone();
+
+            apply_inter_script_spacing(&mut flow);
+            let classes = flow_classes(&flow, &ruby_spans);
+            let aki = aki_classes(&flow, &classes, &vpal_spans);
+            shed_punctuation_aki(&mut flow, &aki);
+            materialize_explicit_pair_spacing(&mut flow, &classes);
+            set_ruby_overhang_rooms(&flow, &mut ruby_units);
+            grow_ruby_bases(&mut flow, &ruby_units);
+            let mut pair_spacing_em = preferred_pair_spacing(&classes);
+            apply_ordered_oikomi(&mut flow, &classes, &mut pair_spacing_em, max_height);
+            let placements =
+                plan_with_edge_trimming(&mut flow, &classes, &mut pair_spacing_em, max_height);
+            let split = if warichu_splits.len() < MAX_WARICHU_SPLITS {
+                next_warichu_split(
+                    &cells.notes,
+                    &flow,
+                    &placements,
+                    &warichu_splits,
+                    max_height,
+                )
+            } else {
+                None
+            };
+            match split {
+                Some(split) => warichu_splits.push(split),
+                None => {
+                    return Self {
+                        flow,
+                        ruby_units,
+                        classes,
+                        pair_spacing_em,
+                        placements,
+                    }
+                }
+            }
+        }
+    }
+
+    fn columns_used(&self) -> usize {
+        self.placements.last().map_or(1, |(column, _)| column + 1)
+    }
+
+    /// Final cells, aligned along their columns, numbered from `column_base`.
+    /// A later span's cell of a warichu piece takes the piece's box.
+    fn place(&self, align: TextAlign, max_height: f32, column_base: usize) -> Vec<VerticalCell> {
+        let tops = aligned_tops(
+            &self.flow,
+            &self.classes,
+            &self.pair_spacing_em,
+            &self.placements,
+            align,
+            max_height,
+        );
+        let mut cells: Vec<VerticalCell> = Vec::with_capacity(self.flow.len());
+        for ((flow, (column, _)), top) in self.flow.iter().zip(&self.placements).zip(tops) {
+            let mut cell = VerticalCell {
+                column: column_base + column,
+                top,
+                ..flow.cell.clone()
+            };
+            if flow.shares_previous_box {
+                if let Some(piece) = cells.last() {
+                    cell.top = piece.top;
+                    cell.extent = piece.extent;
+                    cell.minimum_oikomi_extent = piece.minimum_oikomi_extent;
+                    cell.ink_top = piece.ink_top;
+                    cell.ink_bottom = piece.ink_bottom;
+                }
+            }
+            cells.push(cell);
+        }
+        cells
+    }
+}
+
+/// Sets each column's x, right to left from column 0, and returns the total
+/// width.
+fn place_columns_right_to_left(columns: &mut [VerticalColumn]) -> f32 {
+    let width: f32 = columns.iter().map(|column| column.width).sum();
+    let mut right = width;
+    for column in columns.iter_mut() {
+        right -= column.width;
+        column.x = right;
+    }
+    width
+}
+
 /// Lay out the whole content vertically. Pure of global state: fonts come
 /// through the provider/fallback arguments so native tests can supply
 /// their own.
@@ -483,162 +654,45 @@ pub fn layout_vertical(
         fallback_families,
     };
     let paragraphs = text_content.paragraphs();
-    let span_transforms: Vec<Vec<AppliedTextTransform>> = paragraphs
-        .iter()
-        .map(|paragraph| {
-            paragraph
-                .children()
-                .iter()
-                .map(TextSpan::apply_text_transform_with_source_ranges)
-                .collect()
-        })
-        .collect();
-    let paragraph_utf16_boundaries: Vec<Vec<usize>> = span_transforms
-        .iter()
-        .map(|paragraph| {
-            let mut boundaries = vec![0usize];
-            for character in paragraph.iter().flat_map(|span| span.text.chars()) {
-                let next = boundaries.last().copied().unwrap_or(0) + character.len_utf16();
-                boundaries.push(next);
-            }
-            boundaries
-        })
-        .collect();
-    let span_source_utf16_starts: Vec<Vec<usize>> = paragraphs
-        .iter()
-        .map(|paragraph| {
-            let mut offset = 0usize;
-            paragraph
-                .children()
-                .iter()
-                .map(|span| {
-                    let start = offset;
-                    offset += span.text.encode_utf16().count();
-                    start
-                })
-                .collect()
-        })
-        .collect();
+    let text_maps: Vec<ParagraphTextMap> = paragraphs.iter().map(ParagraphTextMap::new).collect();
 
     let mut runs: Vec<ShapedRun> = Vec::new();
     let mut paints: Vec<skia::Paint> = Vec::new();
     let mut cells: Vec<VerticalCell> = Vec::new();
     let mut columns: Vec<VerticalColumn> = Vec::new();
     let mut paragraph_columns: Vec<(usize, usize)> = Vec::new();
-    let mut all_ruby_rooms = RubyRooms::new();
-    let mut span_utf16_starts: Vec<Vec<usize>> = Vec::new();
+    let mut ruby_rooms_by_span = RubyRooms::new();
 
-    for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
-        let transforms = &span_transforms[paragraph_index];
-        let ruby_spans: Vec<bool> = paragraph
-            .children()
-            .iter()
-            .map(TextSpan::has_ruby)
-            .collect();
-
-        // Plan, then break the first warichu piece that does not fit where
-        // it starts and plan again, until every piece fits.
+    for (paragraph_index, (paragraph, text_map)) in paragraphs.iter().zip(&text_maps).enumerate() {
         let paragraph_cells = ParagraphCells::new(
             &fonts,
             paragraph_index,
             paragraph,
-            transforms,
+            text_map,
             bounds,
             &mut runs,
             &mut paints,
         );
-        let span_starts = paragraph_cells.span_starts.clone();
-        let run_mark = runs.len();
-        let mut warichu_splits: Vec<usize> = Vec::new();
-        let (flow, ruby_units, classes, pair_spacing_em, placements) = loop {
-            runs.truncate(run_mark);
-            let mut flow = paragraph_cells.flow(&warichu_splits, &mut runs);
-            let mut ruby_units = ruby_base_units(paragraph, transforms, &span_starts);
+        let planned = PlannedParagraph::new(&paragraph_cells, &fonts, max_height, &mut runs);
 
-            apply_inter_script_spacing(&mut flow);
-            let classes = flow_classes(&flow, &ruby_spans);
-            shed_punctuation_aki(&mut flow, &classes);
-            materialize_explicit_pair_spacing(&mut flow, &classes);
-            set_ruby_overhang_rooms(&flow, &mut ruby_units);
-            grow_ruby_bases(&mut flow, &ruby_units);
-            let mut pair_spacing_em = preferred_pair_spacing(&classes);
-            apply_ordered_oikomi(&mut flow, &classes, &mut pair_spacing_em, max_height);
-            let placements =
-                plan_with_edge_trimming(&mut flow, &classes, &mut pair_spacing_em, max_height);
-            let split = if warichu_splits.len() < MAX_WARICHU_SPLITS {
-                next_warichu_split(
-                    &paragraph_cells.notes,
-                    &flow,
-                    &placements,
-                    &warichu_splits,
-                    max_height,
-                )
-            } else {
-                None
-            };
-            match split {
-                Some(split) => warichu_splits.push(split),
-                None => break (flow, ruby_units, classes, pair_spacing_em, placements),
-            }
-        };
-        let tops = aligned_tops(
-            &flow,
-            &classes,
-            &pair_spacing_em,
-            &placements,
-            paragraph.text_align(),
-            max_height,
-        );
-
-        let columns_used = placements.last().map_or(1, |(column, _)| column + 1);
         let column_base = columns.len();
+        let columns_used = planned.columns_used();
         columns.extend(std::iter::repeat_n(
             ColumnGeometry::new(paragraph).column(),
             columns_used,
         ));
         paragraph_columns.push((column_base, column_base + columns_used));
 
-        let paragraph_cell_start = cells.len();
-        for ((flow, (column, _)), top) in flow.into_iter().zip(placements).zip(tops) {
-            let mut cell = VerticalCell {
-                column: column_base + column,
-                top,
-                ..flow.cell
-            };
-            if flow.shares_previous_box {
-                if let Some(piece) = cells.last() {
-                    cell.top = piece.top;
-                    cell.extent = piece.extent;
-                    cell.minimum_oikomi_extent = piece.minimum_oikomi_extent;
-                    cell.ink_top = piece.ink_top;
-                    cell.ink_bottom = piece.ink_bottom;
-                }
-            }
-            cells.push(cell);
-        }
-        spread_ruby_base_cells(&mut cells[paragraph_cell_start..], &ruby_units, max_height);
-        all_ruby_rooms.extend(ruby_rooms(paragraph_index, &ruby_units));
-        span_utf16_starts.push(span_starts);
+        let mut placed = planned.place(paragraph.text_align(), max_height, column_base);
+        spread_ruby_base_cells(&mut placed, &planned.ruby_units, max_height);
+        cells.extend(placed);
+        ruby_rooms_by_span.extend(ruby_rooms(paragraph_index, &planned.ruby_units));
     }
 
-    // Columns advance right->left: column 0 is the rightmost.
-    let width: f32 = columns.iter().map(|c| c.width).sum();
-    let mut right = width;
-    for column in columns.iter_mut() {
-        right -= column.width;
-        column.x = right;
-    }
-
-    let (ruby_runs, ruby_cells) = layout_ruby(text_content, &cells, &fonts, &all_ruby_rooms);
-    let (emphasis_runs, emphasis_marks) = layout_emphasis(
-        text_content,
-        &cells,
-        &runs,
-        &span_utf16_starts,
-        &span_transforms,
-        &fonts,
-    );
-
+    let width = place_columns_right_to_left(&mut columns);
+    let (ruby_runs, ruby_cells) = layout_ruby(text_content, &cells, &fonts, &ruby_rooms_by_span);
+    let (emphasis_runs, emphasis_marks) =
+        layout_emphasis(text_content, &cells, &runs, &text_maps, &fonts);
     let height = cells
         .iter()
         .map(|c| c.top + c.extent)
@@ -654,10 +708,7 @@ pub fn layout_vertical(
         emphasis_runs,
         emphasis_marks,
         paragraph_columns,
-        span_utf16_starts,
-        span_source_utf16_starts,
-        span_transforms,
-        paragraph_utf16_boundaries,
+        text_maps,
         width,
         height,
         draws: OnceCell::new(),
@@ -810,6 +861,19 @@ mod tests {
         assert_eq!(second.column, 1);
         assert_eq!(second.top, 0.0);
         assert_eq!((second.start, second.end), (first.end, 14));
+    }
+
+    #[test]
+    fn warichu_span_with_a_reading_breaks_and_shows_no_ruby() {
+        let budget = 6.0 * EM;
+        let note = TextSpan {
+            ruby: "よみ".to_string(),
+            ..warichu_span("あくあくあくあくあく")
+        };
+        let content = spans_content(vec![make_span("くくくく"), note], budget);
+        let layout = layout_with_height(&provider(VMTX_TEST_FONT), &content, budget);
+        assert_eq!(warichu_pieces(&layout).len(), 2, "the note still breaks");
+        assert!(layout.ruby_cells.is_empty(), "warichu shows no ruby");
     }
 
     #[test]

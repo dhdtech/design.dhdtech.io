@@ -280,7 +280,7 @@
     (let [text   (text-shape tcy-digits2-text-content)
           markup (rds/renderToStaticMarkup
                   (mf/element fo-text/text-shape* #js {:shape text :grow-type :fixed}))]
-      (is (str/includes? markup "<span style=\"text-combine-upright:all\">31</span>"))
+      (is (re-find #"<span[^>]*style=\"text-combine-upright:all\">31</span>" markup))
       (is (not (str/includes? markup "digits"))))))
 
 (deftest generated-code-combines-each-digit-run

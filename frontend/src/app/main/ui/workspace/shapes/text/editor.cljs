@@ -37,7 +37,7 @@
   (let [bprops (obj/get props "blockProps")
         data   (obj/get bprops "data")
         style  (sts/generate-paragraph-styles (obj/get bprops "shape")
-                                              (obj/get bprops "data"))
+                                              (wm/renderable-paragraph data))
         dir    (:text-direction data "auto")]
 
 

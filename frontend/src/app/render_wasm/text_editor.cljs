@@ -730,20 +730,28 @@
             (recur (rest remaining-spans) span-end)))
         (last spans)))))
 
-(defn- selected-spans-in-paragraph
-  [paragraph selection-start selection-end]
-  (loop [spans (:children paragraph)
-         position 0
-         selected []]
-    (if-let [span (first spans)]
-      (let [span-end (+ position (count (:text span)))]
-        (recur (rest spans)
-               span-end
-               (cond-> selected
-                 (< (max position selection-start)
-                    (min span-end selection-end))
-                 (conj span))))
-      selected)))
+(defn- paragraph-selected-spans
+  "Return the spans of `para` that overlap the [sel-start, sel-end) char range."
+  [para sel-start sel-end]
+  (loop [spans (:children para)
+         pos   0
+         acc   []]
+    (if (empty? spans)
+      acc
+      (let [span     (first spans)
+            span-end (+ pos (count (:text span)))
+            overlap? (< (max pos sel-start) (min span-end sel-end))]
+        (recur (rest spans) span-end (cond-> acc overlap? (conj span)))))))
+
+(defn- selected-spans
+  "Spans of `paragraphs` that overlap a normalized selection range."
+  [paragraphs {:keys [start-para start-offset end-para end-offset]}]
+  (mapcat (fn [idx]
+            (when-let [para (nth paragraphs idx nil)]
+              (paragraph-selected-spans para
+                                        (if (= idx start-para) start-offset 0)
+                                        (if (= idx end-para) end-offset (para-char-count para)))))
+          (range start-para (inc end-para))))
 
 (defn selection-japanese-styles
   "Japanese span styles of a WASM selection, read from the cached content.
@@ -751,34 +759,22 @@
    span's style."
   [content selection]
   (when (and content selection)
-    (let [{:keys [start-para start-offset end-para end-offset]}
+    (let [{:keys [start-para start-offset end-para end-offset] :as sel-range}
           (normalize-selection selection)
           paragraphs (-> content :children first :children)
           collapsed? (and (= start-para end-para)
                           (= start-offset end-offset))
-          selected-spans
+          spans
           (if collapsed?
             (some-> (get paragraphs start-para)
                     (span-at-offset start-offset)
                     vector)
-            (mapcat
-             (fn [paragraph-index]
-               (when-let [paragraph (get paragraphs paragraph-index)]
-                 (let [selection-start (if (= paragraph-index start-para)
-                                         start-offset
-                                         0)
-                       selection-end (if (= paragraph-index end-para)
-                                       end-offset
-                                       (para-char-count paragraph))]
-                   (selected-spans-in-paragraph paragraph
-                                                selection-start
-                                                selection-end))))
-             (range start-para (inc end-para))))]
-      (when (seq selected-spans)
+            (selected-spans paragraphs sel-range))]
+      (when (seq spans)
         (reduce (fn [result span]
                   (merge-selection-styles result (span-japanese-styles span)))
                 {}
-                selected-spans)))))
+                spans)))))
 
 (defn text-editor-get-current-japanese-styles
   "Japanese span styles of the active WASM editor selection."
@@ -824,33 +820,11 @@
                                     (into (keep identity [before selected after])))))))))]
     (assoc para :children result)))
 
-(defn- paragraph-selected-spans
-  "Return the spans of `para` that overlap the [sel-start, sel-end) char range."
-  [para sel-start sel-end]
-  (loop [spans (:children para)
-         pos   0
-         acc   []]
-    (if (empty? spans)
-      acc
-      (let [span     (first spans)
-            span-end (+ pos (count (:text span)))
-            overlap? (< (max pos sel-start) (min span-end sel-end))]
-        (recur (rest spans) span-end (cond-> acc overlap? (conj span)))))))
-
 (defn selection-fills
   "The selection's fills: shared vector if all spans match, `:multiple` if not, nil if empty."
-  [content {:keys [start-para start-offset end-para end-offset]}]
-  (let [paragraphs (:children (first (:children content)))
-        selected   (mapcat (fn [idx para]
-                             (cond
-                               (or (< idx start-para) (> idx end-para)) nil
-                               (= start-para end-para) (paragraph-selected-spans para start-offset end-offset)
-                               (= idx start-para)      (paragraph-selected-spans para start-offset (para-char-count para))
-                               (= idx end-para)        (paragraph-selected-spans para 0 end-offset)
-                               :else                   (paragraph-selected-spans para 0 (para-char-count para))))
-                           (range (count paragraphs))
-                           paragraphs)
-        fills-set  (into #{} (map :fills) selected)]
+  [content selection]
+  (let [selected  (selected-spans (:children (first (:children content))) selection)
+        fills-set (into #{} (map :fills) selected)]
     (cond
       (empty? selected)       nil
       (= 1 (count fills-set)) (first fills-set)

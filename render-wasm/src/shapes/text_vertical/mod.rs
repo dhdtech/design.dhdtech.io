@@ -41,14 +41,15 @@ mod shaping;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use annotations::{distribute_ruby_tops, ruby_overhang_room};
 pub use layout::{block_axis_offset, layout_for_rect, VerticalLayout};
 pub(crate) use orientation::is_emoji_char;
 pub use paint::{
     paint_drop_shadow, paint_grid, paint_layout, paint_stroke, paint_text_vertical,
-    paint_text_vertical_with, vertical_text_paths,
+    paint_text_vertical_with, vertical_text_paths, GlyphOutput,
 };
 pub use positions::{
     caret_from_point, caret_rect, intersects, position_data, range_rects, DIRECTION_EMPHASIS_MARK,
 };
-pub(crate) use shaping::{shape_segment_with_fallbacks, single_glyph_blob, span_font_families};
+pub(crate) use shaping::{
+    shape_segment_with_fallbacks, single_glyph_blob, span_font_families, ShapedRun,
+};

@@ -185,9 +185,6 @@
                       (rx/empty)))
          (wrf/with-pending :font ids))))
 
-(def ruby-presentation-attrs
-  [:ruby-hidden :ruby-size :ruby-align :ruby-overhang :ruby-side])
-
 ;; -- Content helpers
 
 ;; Style attrs typed as `::sm/text` in the content schema (see
@@ -442,8 +439,7 @@
 (defn current-ruby-values
   [{:keys [attrs shape]}]
   (shape-current-values shape
-                        #(and (txt/is-text-node? %)
-                              (not (str/blank? (:ruby %))))
+                        #(and (txt/is-text-node? %) (jl/ruby-span? %))
                         attrs))
 
 (defn v3-current-text-values
@@ -724,45 +720,41 @@
   [shape attrs]
   (txt/update-text-content
    shape
-   #(and (txt/is-text-node? %)
-         (not (str/blank? (:ruby %))))
+   #(and (txt/is-text-node? %) (jl/ruby-span? %))
    d/txt-merge
    attrs))
 
-(defn update-ruby-presentation
-  [id attrs]
-  (ptk/reify ::update-ruby-presentation
+(defn update-all-ruby-presentation
+  "Apply ruby presentation `attrs` to the ruby spans of the text shapes in
+   `ids`, and of the texts inside the groups among them, in one update."
+  [ids attrs]
+  (ptk/reify ::update-all-ruby-presentation
     ptk/WatchEvent
     (watch [_ state _]
       (let [objects   (dsh/lookup-page-objects state)
-            shape     (get objects id)
             wasm?     (features/active-feature? state "render-wasm/v1")
-            shape-ids (cond
-                        (cfh/text-shape? shape)  [id]
-                        (cfh/group-shape? shape) (cfh/get-children-ids objects id))
+            shape-ids (into []
+                            (comp (mapcat (fn [id]
+                                            (let [shape (get objects id)]
+                                              (cond
+                                                (cfh/text-shape? shape)  [id]
+                                                (cfh/group-shape? shape) (cfh/get-children-ids objects id)))))
+                                  (distinct))
+                            ids)
             update-fn (fn [shape]
                         (let [updated-shape (update-ruby-presentation-attrs shape attrs)]
                           (when (and wasm? (cfh/text-shape? updated-shape))
                             (wasm.text-editor/cache-shape-text-content!
                              (:id updated-shape)
                              (:content updated-shape)))
-                          updated-shape))]
+                          updated-shape))
+            undo-id   (js/Symbol)]
         (rx/concat
-         (rx/of (dwsh/update-shapes shape-ids update-fn))
+         (rx/of (dwu/start-undo-transaction undo-id)
+                (dwsh/update-shapes shape-ids update-fn))
          (if wasm?
            (rx/of (dwwt/resize-wasm-text-all shape-ids))
-           (rx/empty)))))))
-
-(defn update-all-ruby-presentation
-  [ids attrs]
-  (ptk/reify ::update-all-ruby-presentation
-    ptk/WatchEvent
-    (watch [_ _ _]
-      (let [undo-id (js/Symbol)]
-        (rx/concat
-         (rx/of (dwu/start-undo-transaction undo-id))
-         (->> (rx/from ids)
-              (rx/map #(update-ruby-presentation % attrs)))
+           (rx/empty))
          (rx/of (dwu/commit-undo-transaction undo-id)))))))
 
 (defn migrate-node

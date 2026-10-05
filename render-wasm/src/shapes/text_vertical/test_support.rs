@@ -6,9 +6,8 @@ use skia_safe::{textlayout::TypefaceFontProvider, FontMgr};
 
 use crate::math::Rect;
 use crate::shapes::{
-    AnnotationClearance, FontFamily, FontFeatures, FontStyle, GrowType, Paragraph, RubyAlign,
-    RubyOverhang, RubySide, RubySize, TextAlign, TextCombineUpright, TextContent, TextDecoration,
-    TextDirection, TextEmphasis, TextOrientation, TextSpan, WritingMode,
+    FontFamily, FontStyle, GrowType, Paragraph, TextAlign, TextContent, TextDecoration,
+    TextDirection, TextOrientation, TextSpan, WritingMode,
 };
 use crate::Uuid;
 
@@ -50,29 +49,9 @@ pub(super) fn provider_with_fallback(font: &[u8], fallback: &[u8]) -> TypefaceFo
 pub(super) fn make_span(text: &str) -> TextSpan {
     TextSpan {
         text: text.to_string(),
-        font_family: FontFamily::new(Uuid::nil(), 400, FontStyle::Normal),
         font_size: EM,
         line_height: 1.0,
-        letter_spacing: 0.0,
-        font_weight: 400,
-        font_variant_id: Uuid::nil(),
-        text_decoration: None,
-        text_transform: None,
-        text_direction: TextDirection::LTR,
-        text_orientation: TextOrientation::Mixed,
-        text_combine_upright: TextCombineUpright::None,
-        text_emphasis: TextEmphasis::None,
-        ruby: String::default(),
-        warichu: false,
-        font_features: FontFeatures::None,
-        annotation_clearance: AnnotationClearance::None,
-        ruby_size: RubySize::Half,
-        ruby_align: RubyAlign::SpaceAround,
-        ruby_overhang: RubyOverhang::Auto,
-        ruby_side: RubySide::Over,
-        paragraph_position: u32::MAX,
-        span_position: u32::MAX,
-        fills: vec![],
+        ..TextSpan::default()
     }
 }
 

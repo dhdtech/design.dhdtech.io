@@ -7,7 +7,8 @@
 (ns app.common.types.shape.text
   (:require
    [app.common.schema :as sm]
-   [app.common.types.fills :refer [schema:fills]]))
+   [app.common.types.fills :refer [schema:fills]]
+   [app.common.types.text.japanese-layout :as jl]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; SCHEMA
@@ -15,20 +16,11 @@
 
 (def node-types #{"root" "paragraph-set" "paragraph"})
 
-;; Values of the Japanese layout attrs (see `app.common.types.text.japanese-layout`).
-(def ^:private schema:writing-mode [:enum "horizontal-tb" "vertical-rl"])
-;; Paragraphs set the orientation of the whole shape; spans carry a copy.
-(def ^:private schema:text-orientation [:enum "mixed" "upright"])
-(def ^:private schema:text-combine-upright [:enum "none" "all" "digits" "digits2" "digits3"])
-(def ^:private schema:text-emphasis
-  [:enum "none" "filled-dot" "open-dot" "filled-circle" "open-circle" "filled-sesame" "open-sesame"])
-(def ^:private schema:ruby-size [:enum "half" "third" "quarter"])
-(def ^:private schema:ruby-align [:enum "space-around" "center" "start" "space-between"])
-(def ^:private schema:ruby-overhang [:enum "auto" "none"])
-(def ^:private schema:ruby-side [:enum "over" "under"])
-(def ^:private schema:warichu [:enum "none" "warichu"])
-(def ^:private schema:font-features [:enum "none" "palt" "vpal"])
-(def ^:private schema:annotation-clearance [:enum "none" "auto"])
+;; Values of a Japanese layout enum attr; paragraphs set the orientation
+;; of the whole shape and spans carry a copy.
+(defn- schema:jl-enum
+  [attr]
+  (into [:enum] (get jl/enum-values attr)))
 
 (def schema:content
   [:map
@@ -51,8 +43,8 @@
          [:font-style {:optional true} ::sm/text]
          [:font-weight {:optional true} ::sm/text]
          [:direction {:optional true} ::sm/text]
-         [:writing-mode {:optional true} schema:writing-mode]
-         [:text-orientation {:optional true} schema:text-orientation]
+         [:writing-mode {:optional true} (schema:jl-enum :writing-mode)]
+         [:text-orientation {:optional true} (schema:jl-enum :text-orientation)]
          [:text-decoration {:optional true} ::sm/text]
          [:text-transform {:optional true} ::sm/text]
          [:typography-ref-id {:optional true} [:maybe ::sm/uuid]]
@@ -69,18 +61,18 @@
             [:font-style {:optional true} ::sm/text]
             [:font-weight {:optional true} ::sm/text]
             [:direction {:optional true} ::sm/text]
-            [:text-combine-upright {:optional true} schema:text-combine-upright]
-            [:text-emphasis {:optional true} schema:text-emphasis]
+            [:text-combine-upright {:optional true} (schema:jl-enum :text-combine-upright)]
+            [:text-emphasis {:optional true} (schema:jl-enum :text-emphasis)]
             [:ruby {:optional true} :string]
             [:ruby-hidden {:optional true} :boolean]
-            [:ruby-size {:optional true} schema:ruby-size]
-            [:ruby-align {:optional true} schema:ruby-align]
-            [:ruby-overhang {:optional true} schema:ruby-overhang]
-            [:ruby-side {:optional true} schema:ruby-side]
-            [:warichu {:optional true} schema:warichu]
-            [:font-features {:optional true} schema:font-features]
-            [:annotation-clearance {:optional true} schema:annotation-clearance]
-            [:text-orientation {:optional true} schema:text-orientation]
+            [:ruby-size {:optional true} (schema:jl-enum :ruby-size)]
+            [:ruby-align {:optional true} (schema:jl-enum :ruby-align)]
+            [:ruby-overhang {:optional true} (schema:jl-enum :ruby-overhang)]
+            [:ruby-side {:optional true} (schema:jl-enum :ruby-side)]
+            [:warichu {:optional true} (schema:jl-enum :warichu)]
+            [:font-features {:optional true} (schema:jl-enum :font-features)]
+            [:annotation-clearance {:optional true} (schema:jl-enum :annotation-clearance)]
+            [:text-orientation {:optional true} (schema:jl-enum :text-orientation)]
             [:text-decoration {:optional true} ::sm/text]
             [:text-transform {:optional true} ::sm/text]
             [:typography-ref-id {:optional true} [:maybe ::sm/uuid]]

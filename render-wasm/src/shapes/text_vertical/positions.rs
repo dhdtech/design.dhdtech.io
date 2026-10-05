@@ -24,9 +24,10 @@ fn source_utf16_range(
     span: usize,
     transformed: Range<usize>,
 ) -> Range<usize> {
-    let transformed_span_start = layout.span_utf16_starts[paragraph][span];
-    let source_span_start = layout.span_source_utf16_starts[paragraph][span];
-    let relative = layout.span_transforms[paragraph][span].source_utf16_range(
+    let text_map = &layout.text_maps[paragraph];
+    let transformed_span_start = text_map.span_starts[span];
+    let source_span_start = text_map.span_source_starts[span];
+    let relative = text_map.span_transforms[span].source_utf16_range(
         transformed.start - transformed_span_start..transformed.end - transformed_span_start,
     );
     source_span_start + relative.start..source_span_start + relative.end
@@ -47,7 +48,7 @@ fn span_entry(
     (x, y, width, height): (f32, f32, f32, f32),
     direction: u32,
 ) -> PositionData {
-    let span_start = layout.span_source_utf16_starts[cell.paragraph][cell.span];
+    let span_start = layout.text_maps[cell.paragraph].span_source_starts[cell.span];
     PositionData {
         paragraph: cell.paragraph as u32,
         span: cell.span as u32,
@@ -111,16 +112,35 @@ fn warichu_entries(
     .collect()
 }
 
-/// Position-data entries for the v2 editor / exports: consecutive cells of
-/// the same span in the same column merge into one vertical strip.
+/// Position-data entries for the v2 editor / exports: the base text strips,
+/// then the ruby strips, then one box per emphasis mark.
 pub fn position_data(
     layout: &VerticalLayout,
     bounds: &Rect,
     vertical_align: VerticalAlign,
 ) -> Vec<PositionData> {
-    let (origin_x, origin_y) = layout.origin(bounds, vertical_align);
-    let mut result: Vec<PositionData> = Vec::new();
+    let origin = layout.origin(bounds, vertical_align);
+    let mut result = base_entries(layout, origin);
+    result.extend(ruby_entries(layout, origin));
+    result.extend(emphasis_entries(layout, origin));
+    result
+}
 
+/// A cell that keeps its own strip: a warichu piece, or a tate-chu-yoko
+/// composite, which SVG text sets with `text-combine-upright: all` per
+/// element.
+fn has_own_strip(cell: &VerticalCell) -> bool {
+    matches!(
+        cell.kind,
+        CellKind::Warichu { .. } | CellKind::TateChuYoko { .. }
+    )
+}
+
+/// Base text strips: consecutive cells of the same span in the same column
+/// merge into one strip over the column's base band, so overlay and
+/// selection skip the ruby gutter.
+fn base_entries(layout: &VerticalLayout, (origin_x, origin_y): (f32, f32)) -> Vec<PositionData> {
+    let mut result: Vec<PositionData> = Vec::new();
     let mut i = 0;
     while i < layout.cells.len() {
         let first = &layout.cells[i];
@@ -137,32 +157,22 @@ pub fn position_data(
         let mut source_range = cell_source_utf16_range(layout, first);
         let mut bottom = first.top + first.extent;
         let mut j = i + 1;
-        // A tate-chu-yoko composite keeps its own strip, so SVG text can set
-        // it with `text-combine-upright: all` (which SVG applies per element).
-        let own_strip = |cell: &VerticalCell| {
-            matches!(
-                cell.kind,
-                CellKind::Warichu { .. } | CellKind::TateChuYoko { .. }
-            )
-        };
-        while j < layout.cells.len() && !own_strip(first) {
+        while j < layout.cells.len() && !has_own_strip(first) {
             let next = &layout.cells[j];
-            if next.paragraph == first.paragraph
+            let same_strip = next.paragraph == first.paragraph
                 && next.span == first.span
                 && next.column == first.column
-                && !own_strip(next)
-            {
-                let next_source = cell_source_utf16_range(layout, next);
-                source_range.start = source_range.start.min(next_source.start);
-                source_range.end = source_range.end.max(next_source.end);
-                bottom = next.top + next.extent;
-                j += 1;
-            } else {
+                && !has_own_strip(next);
+            if !same_strip {
                 break;
             }
+            let next_source = cell_source_utf16_range(layout, next);
+            source_range.start = source_range.start.min(next_source.start);
+            source_range.end = source_range.end.max(next_source.end);
+            bottom = next.top + next.extent;
+            j += 1;
         }
         let column = &layout.columns[first.column];
-        // Base sub-band only, so overlay and selection skip the ruby gutter.
         let rect = (
             origin_x + column.x,
             origin_y + first.top,
@@ -178,53 +188,58 @@ pub fn position_data(
         ));
         i = j;
     }
-
-    // Ruby strips at the flow positions the canvas paints. `start_pos` and
-    // `end_pos` are UTF-16 offsets into the span's ruby string, taken from the
-    // shaped clusters so surrogate pairs slice correctly.
-    for ruby in &layout.ruby_cells {
-        let (Some(first), Some(last)) = (ruby.glyphs.first(), ruby.glyphs.last()) else {
-            continue;
-        };
-        if ruby.base_segments.is_empty() {
-            continue;
-        }
-        let column = &layout.columns[ruby.column];
-        let top = ruby.glyph_tops.iter().copied().fold(f32::MAX, f32::min);
-        let bottom = ruby.glyph_tops.iter().copied().fold(f32::MIN, f32::max) + ruby.font_size;
-        result.push(PositionData {
-            paragraph: ruby.paragraph as u32,
-            span: ruby.span as u32,
-            start_pos: first.utf16_start as u32,
-            end_pos: last.utf16_end as u32,
-            x: origin_x + ruby_strip_x(column, ruby.font_size, ruby.base_font_size, ruby.side),
-            y: origin_y + top,
-            width: ruby.font_size,
-            height: bottom - top,
-            direction: DIRECTION_VERTICAL_RUBY,
-        });
-    }
-
-    for mark in &layout.emphasis_marks {
-        let cell = &layout.cells[mark.cell];
-        let (center_x, center_y) = emphasis_mark_center(layout, mark);
-        let size = mark.font_size;
-        let rect = (
-            origin_x + center_x - size / 2.0,
-            origin_y + center_y - size / 2.0,
-            size,
-            size,
-        );
-        let source = cell_source_utf16_range(layout, cell);
-        result.push(span_entry(
-            layout,
-            cell,
-            source,
-            rect,
-            DIRECTION_EMPHASIS_MARK,
-        ));
-    }
     result
+}
+
+/// Ruby strips at the flow positions the canvas paints. `start_pos` and
+/// `end_pos` are UTF-16 offsets into the span's ruby string, taken from the
+/// shaped clusters so surrogate pairs slice correctly.
+fn ruby_entries(layout: &VerticalLayout, (origin_x, origin_y): (f32, f32)) -> Vec<PositionData> {
+    layout
+        .ruby_cells
+        .iter()
+        .filter_map(|ruby| {
+            let (first, last) = (ruby.glyphs.first()?, ruby.glyphs.last()?);
+            let column = &layout.columns[ruby.column];
+            let top = ruby.glyph_tops.iter().copied().fold(f32::MAX, f32::min);
+            let bottom = ruby.glyph_tops.iter().copied().fold(f32::MIN, f32::max) + ruby.font_size;
+            Some(PositionData {
+                paragraph: ruby.paragraph as u32,
+                span: ruby.span as u32,
+                start_pos: first.utf16_start as u32,
+                end_pos: last.utf16_end as u32,
+                x: origin_x + ruby_strip_x(column, ruby.font_size, ruby.base_font_size, ruby.side),
+                y: origin_y + top,
+                width: ruby.font_size,
+                height: bottom - top,
+                direction: DIRECTION_VERTICAL_RUBY,
+            })
+        })
+        .collect()
+}
+
+/// One box per emphasis mark, covering its base cell's source range.
+fn emphasis_entries(
+    layout: &VerticalLayout,
+    (origin_x, origin_y): (f32, f32),
+) -> Vec<PositionData> {
+    layout
+        .emphasis_marks
+        .iter()
+        .map(|mark| {
+            let cell = &layout.cells[mark.cell];
+            let (center_x, center_y) = emphasis_mark_center(layout, mark);
+            let size = mark.font_size;
+            let rect = (
+                origin_x + center_x - size / 2.0,
+                origin_y + center_y - size / 2.0,
+                size,
+                size,
+            );
+            let source = cell_source_utf16_range(layout, cell);
+            span_entry(layout, cell, source, rect, DIRECTION_EMPHASIS_MARK)
+        })
+        .collect()
 }
 
 /// True when the point (in the same space as `bounds`) hits laid-out text.
@@ -253,7 +268,7 @@ fn scalar_offset_from_utf16(
     paragraph: usize,
     utf16_offset: usize,
 ) -> Option<usize> {
-    let boundaries = layout.paragraph_utf16_boundaries.get(paragraph)?;
+    let boundaries = &layout.text_maps.get(paragraph)?.utf16_boundaries;
     Some(match boundaries.binary_search(&utf16_offset) {
         Ok(index) => index,
         Err(index) => index.saturating_sub(1),
@@ -308,15 +323,10 @@ fn warichu_first_line_len(
     Some(first_end.saturating_sub(cell_start).min(chars))
 }
 
-/// Caret position (paragraph index, paragraph-relative Unicode scalar
-/// offset) for a point relative to the content block's top-left origin.
-pub fn caret_from_point(layout: &VerticalLayout, x: f32, y: f32) -> Option<(usize, usize)> {
-    if layout.columns.is_empty() {
-        return None;
-    }
-
-    // Columns are ordered right->left, i.e. descending x.
-    let column_index = layout
+/// Index of the column under `x`; points outside every column take the
+/// nearest end. Columns are ordered right to left, i.e. descending x.
+fn column_at(layout: &VerticalLayout, x: f32) -> usize {
+    layout
         .columns
         .iter()
         .position(|c| x >= c.x && x < c.x + c.width)
@@ -324,94 +334,119 @@ pub fn caret_from_point(layout: &VerticalLayout, x: f32, y: f32) -> Option<(usiz
             0
         } else {
             layout.columns.len() - 1
-        });
+        })
+}
 
+/// True when a point inside a warichu cell's box lies past this cell's part
+/// of its sub-line and the next cell shares the box, so the caret belongs to
+/// that next span.
+fn passes_to_next_warichu_cell(
+    layout: &VerticalLayout,
+    cell: &VerticalCell,
+    next: Option<&&VerticalCell>,
+    x: f32,
+    y: f32,
+) -> bool {
+    if !matches!(cell.kind, CellKind::Warichu { .. }) {
+        return false;
+    }
+    let first_line = x >= column_base_center(&layout.columns[cell.column]);
+    let (top, extent) = warichu_line_span(cell, first_line);
+    let next_shares_box = next
+        .is_some_and(|next| matches!(next.kind, CellKind::Warichu { .. }) && next.top == cell.top);
+    next_shares_box && (extent <= 0.0 || y >= cell.top + top + extent)
+}
+
+/// Paragraph scalar offset of the caret for a point inside `cell`, which
+/// holds the scalars `cell_start..cell_end`.
+fn caret_offset_in_cell(
+    layout: &VerticalLayout,
+    cell: &VerticalCell,
+    (cell_start, cell_end): (usize, usize),
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    let chars = (cell_end - cell_start).max(1);
+    let column = &layout.columns[cell.column];
+    Some(match cell.kind {
+        CellKind::Rotated { .. } => {
+            // The glyph boundary nearest the point along the run.
+            let within = y - cell.top;
+            let nearest = (0..=chars)
+                .min_by(|a, b| {
+                    let distance = |index: &usize| {
+                        (boundary_offset(layout, cell, *index, chars) - within).abs()
+                    };
+                    distance(a).total_cmp(&distance(b))
+                })
+                .unwrap_or(0);
+            cell_start + nearest
+        }
+        CellKind::TateChuYoko { .. } => {
+            // The digits run left->right inside the composite, so the
+            // horizontal position picks the offset within it.
+            let left = column_base_center(column) - cell.h_advance / 2.0;
+            let frac = ((x - left) / cell.h_advance.max(1.0)).clamp(0.0, 1.0);
+            cell_start + ((frac * chars as f32).round() as usize).min(chars)
+        }
+        CellKind::Warichu { first_chars, .. } => {
+            // The right sub-column holds the first sub-line, the left the
+            // second; y picks the offset within that sub-line.
+            let first = warichu_first_line_len(layout, cell, first_chars, cell_start, chars)?;
+            let first_line = x >= column_base_center(column);
+            let (lo, hi) = if first_line {
+                (0, first)
+            } else {
+                (first, chars)
+            };
+            let (top, extent) = warichu_line_span(cell, first_line);
+            let line_chars = (hi - lo).max(1);
+            let frac = ((y - cell.top - top) / extent.max(1.0)).clamp(0.0, 1.0);
+            cell_start + lo + ((frac * line_chars as f32).round() as usize).min(hi - lo)
+        }
+        CellKind::Upright { .. } | CellKind::SyntheticRotated { .. } => {
+            if y < cell.top + cell.extent / 2.0 {
+                cell_start
+            } else {
+                cell_end
+            }
+        }
+    })
+}
+
+/// Caret position (paragraph index, paragraph-relative Unicode scalar
+/// offset) for a point relative to the content block's top-left origin.
+pub fn caret_from_point(layout: &VerticalLayout, x: f32, y: f32) -> Option<(usize, usize)> {
+    if layout.columns.is_empty() {
+        return None;
+    }
+    let column_index = column_at(layout, x);
     let paragraph = layout
         .paragraph_columns
         .iter()
         .position(|(start, end)| column_index >= *start && column_index < *end)?;
-
     let column_cells: Vec<&VerticalCell> = layout
         .cells
         .iter()
         .filter(|c| c.column == column_index)
         .collect();
-
-    if column_cells.is_empty() {
+    let Some(last) = column_cells.last() else {
         return Some((paragraph, 0));
-    }
+    };
 
     for (index, cell) in column_cells.iter().enumerate() {
-        if y < cell.top + cell.extent {
-            let (cell_start, cell_end) = cell_scalar_range(layout, cell)?;
-            let chars = (cell_end - cell_start).max(1);
-            // Cells of one warichu piece share its box: pass on to the next
-            // span's cell when the point is past this one's sub-line part.
-            if let CellKind::Warichu { .. } = cell.kind {
-                let first_line = x >= column_base_center(&layout.columns[cell.column]);
-                let (top, extent) = warichu_line_span(cell, first_line);
-                let next_shares_box = column_cells.get(index + 1).is_some_and(|next| {
-                    matches!(next.kind, CellKind::Warichu { .. }) && next.top == cell.top
-                });
-                if next_shares_box && (extent <= 0.0 || y >= cell.top + top + extent) {
-                    continue;
-                }
-            }
-            let offset = match cell.kind {
-                CellKind::Rotated { .. } => {
-                    // The glyph boundary nearest the point along the run.
-                    let within = y - cell.top;
-                    let nearest = (0..=chars)
-                        .min_by(|a, b| {
-                            let distance = |index: &usize| {
-                                (boundary_offset(layout, cell, *index, chars) - within).abs()
-                            };
-                            distance(a).total_cmp(&distance(b))
-                        })
-                        .unwrap_or(0);
-                    cell_start + nearest
-                }
-                CellKind::TateChuYoko { .. } => {
-                    // The digits run left->right inside the composite, so the
-                    // horizontal position picks the offset within it.
-                    let column = &layout.columns[cell.column];
-                    let left = column_base_center(column) - cell.h_advance / 2.0;
-                    let frac = ((x - left) / cell.h_advance.max(1.0)).clamp(0.0, 1.0);
-                    cell_start + ((frac * chars as f32).round() as usize).min(chars)
-                }
-                CellKind::Warichu { first_chars, .. } => {
-                    // The right sub-column holds the first sub-line, the left
-                    // the second; y picks the offset within that sub-line.
-                    let column = &layout.columns[cell.column];
-                    let centre = column_base_center(column);
-                    let first =
-                        warichu_first_line_len(layout, cell, first_chars, cell_start, chars)?;
-                    let first_line = x >= centre;
-                    let (lo, hi) = if first_line {
-                        (0, first)
-                    } else {
-                        (first, chars)
-                    };
-                    let (top, extent) = warichu_line_span(cell, first_line);
-                    let line_chars = (hi - lo).max(1);
-                    let frac = ((y - cell.top - top) / extent.max(1.0)).clamp(0.0, 1.0);
-                    cell_start + lo + ((frac * line_chars as f32).round() as usize).min(hi - lo)
-                }
-                CellKind::Upright { .. } | CellKind::SyntheticRotated { .. } => {
-                    if y < cell.top + cell.extent / 2.0 {
-                        cell_start
-                    } else {
-                        cell_end
-                    }
-                }
-            };
-            return Some((paragraph, offset));
+        if y >= cell.top + cell.extent
+            || passes_to_next_warichu_cell(layout, cell, column_cells.get(index + 1), x, y)
+        {
+            continue;
         }
+        let range = cell_scalar_range(layout, cell)?;
+        return Some((paragraph, caret_offset_in_cell(layout, cell, range, x, y)?));
     }
 
     Some((
         paragraph,
-        scalar_offset_from_utf16(layout, paragraph, column_cells.last().unwrap().end)?,
+        scalar_offset_from_utf16(layout, paragraph, last.end)?,
     ))
 }
 
@@ -664,8 +699,8 @@ mod tests {
     #[test]
     fn caret_from_point_lands_inside_tcy_composite() {
         let mut content = make_content_with_spans(&["1234", "あ"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::All);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::All;
         let layout = layout_content(&content, 400.0);
         let cell = &layout.cells[0];
         assert!(matches!(cell.kind, CellKind::TateChuYoko { .. }));
@@ -684,8 +719,8 @@ mod tests {
     #[test]
     fn caret_rect_tracks_horizontal_axis_inside_tcy_composite() {
         let mut content = make_content_with_spans(&["1234", "あ"], 400.0);
-        content.paragraphs_mut()[0].children_mut()[0]
-            .set_text_combine_upright(TextCombineUpright::All);
+        content.paragraphs_mut()[0].children_mut()[0].text_combine_upright =
+            TextCombineUpright::All;
         let layout = layout_content(&content, 400.0);
         let cell = &layout.cells[0];
         assert!(matches!(cell.kind, CellKind::TateChuYoko { .. }));

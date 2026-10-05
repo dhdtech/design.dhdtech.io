@@ -10,6 +10,7 @@
    [app.common.data.macros :as dm]
    [app.common.types.shape.layout :as ctl]
    [app.common.types.text :as txt]
+   [app.common.types.text.japanese-layout :as jl]
    [app.main.data.workspace.texts :as dwt]
    [app.main.features :as features]
    [app.main.refs :as refs]
@@ -182,10 +183,10 @@
 
         ruby-values
         (if text-selection-active
-          (select-keys text-values dwt/ruby-presentation-attrs)
+          (select-keys text-values jl/ruby-presentation-attrs)
           (dwt/current-ruby-values
            {:shape shape
-            :attrs dwt/ruby-presentation-attrs}))]
+            :attrs jl/ruby-presentation-attrs}))]
 
     [:*
      [:> layer-menu* {:ids ids

@@ -48,7 +48,7 @@ fn render_cursor(
     text_content: &TextContent,
     shape: &Shape,
 ) {
-    let Some(rect) = calculate_cursor_rect(editor_state, text_content, shape) else {
+    let Some(rect) = cursor_rect(editor_state, text_content, shape) else {
         return;
     };
 
@@ -218,14 +218,6 @@ pub(crate) fn cursor_rect(
     text_content: &TextContent,
     shape: &Shape,
 ) -> Option<Rect> {
-    calculate_cursor_rect(editor_state, text_content, shape)
-}
-
-fn calculate_cursor_rect(
-    editor_state: &TextEditorState,
-    text_content: &TextContent,
-    shape: &Shape,
-) -> Option<Rect> {
     let cursor = editor_state.selection.focus;
     let paragraphs = text_content.paragraphs();
     if cursor.paragraph >= paragraphs.len() {
@@ -242,104 +234,75 @@ fn calculate_cursor_rect(
     }
 
     let layout_paragraphs: Vec<_> = text_content.layout.paragraphs.iter().flatten().collect();
+    let laid_out_para = layout_paragraphs.get(cursor.paragraph)?;
+    let y_offset = paragraphs_vertical_offset(shape, &layout_paragraphs)
+        + layout_paragraphs[..cursor.paragraph]
+            .iter()
+            .map(|paragraph| paragraph.height())
+            .sum::<f32>();
+    let rect = horizontal_caret_rect(&paragraphs[cursor.paragraph], laid_out_para, cursor.offset);
+    Some(rect.with_offset((0.0, y_offset)))
+}
 
-    if cursor.paragraph >= layout_paragraphs.len() {
-        return None;
+/// Caret rect at the source character offset `char_pos` of a laid-out
+/// horizontal paragraph, in the paragraph's coordinates. It covers the
+/// character at the offset (overtype carets use its width), or follows the
+/// last character at the paragraph end.
+fn horizontal_caret_rect(
+    para: &crate::shapes::Paragraph,
+    laid_out_para: &skia_safe::textlayout::Paragraph,
+    char_pos: usize,
+) -> Rect {
+    if let Some(rect) = crate::shapes::horizontal_warichu_caret_rect(para, laid_out_para, char_pos)
+    {
+        return rect;
+    }
+    let para_char_count: usize = para
+        .children()
+        .iter()
+        .map(|span| span.text.chars().count())
+        .sum();
+    let default_rect = || Rect::from_xywh(0.0, 0.0, 1.0, laid_out_para.height());
+    if para_char_count == 0 {
+        return default_rect();
     }
 
-    let mut y_offset = paragraphs_vertical_offset(shape, &layout_paragraphs);
-    for (idx, laid_out_para) in layout_paragraphs.iter().enumerate() {
-        if idx == cursor.paragraph {
-            let char_pos = cursor.offset;
-            // For cursor, we get a zero-width range at the position
-            // We need to handle edge cases:
-            // - At start of paragraph: use position 0
-            // - At end of paragraph: use last position
-            let para = &paragraphs[cursor.paragraph];
-            if let Some(rect) =
-                crate::shapes::horizontal_warichu_caret_rect(para, laid_out_para, char_pos)
-            {
-                return Some(Rect::from_xywh(
-                    rect.x(),
-                    y_offset + rect.y(),
-                    rect.width(),
-                    rect.height(),
-                ));
-            }
-            let para_char_count: usize = para
-                .children()
-                .iter()
-                .map(|span| span.text.chars().count())
-                .sum();
-
-            // Cursor offsets count source characters; the laid-out paragraph
-            // indexes the transformed, kinsoku-shifted builder text.
-            let offsets = crate::shapes::HorizontalOffsets::new(para);
-            let (cursor_x, cursor_y, cursor_width, cursor_height) = if para_char_count == 0 {
-                // Empty paragraph - use default height
-                (0.0, 0.0, 1.0, laid_out_para.height())
-            } else if char_pos == 0 {
-                let rects = laid_out_para.get_rects_for_range(
-                    0..offsets.source_to_builder(1),
-                    RectHeightStyle::Max,
-                    RectWidthStyle::Tight,
-                );
-                if !rects.is_empty() {
-                    let r = &rects[0].rect;
-                    (r.left(), r.top(), r.width(), r.height())
-                } else {
-                    (0.0, 0.0, 1.0, laid_out_para.height())
-                }
-            } else if char_pos >= para_char_count {
-                let last_start = offsets.source_to_builder(para_char_count.saturating_sub(1));
-                let last_end = offsets.source_to_builder(para_char_count);
-                let rects = laid_out_para.get_rects_for_range(
-                    last_start..last_end,
-                    RectHeightStyle::Max,
-                    RectWidthStyle::Tight,
-                );
-                if !rects.is_empty() {
-                    let r = &rects[0].rect;
-                    (r.right(), r.top(), r.width(), r.height())
-                } else if let Some(line) = laid_out_para.get_line_metrics().last() {
-                    (
-                        line.left as f32 + line.width as f32,
-                        0.0,
-                        1.0,
-                        laid_out_para.height(),
-                    )
-                } else {
-                    (0.0, 0.0, 1.0, laid_out_para.height())
-                }
-            } else {
-                let start = offsets.source_to_builder(char_pos);
-                let end = offsets.source_to_builder(char_pos + 1);
-                let rects = laid_out_para.get_rects_for_range(
-                    start..end,
-                    RectHeightStyle::Max,
-                    RectWidthStyle::Tight,
-                );
-                if !rects.is_empty() {
-                    let r = &rects[0].rect;
-                    (r.left(), r.top(), r.width(), r.height())
-                } else {
-                    // Fallback: use glyph position
-                    let pos = laid_out_para.get_glyph_position_at_coordinate((0.0, 0.0));
-                    (pos.position as f32, 0.0, 1.0, laid_out_para.height())
-                }
-            };
-
-            return Some(Rect::from_xywh(
-                cursor_x,
-                y_offset + cursor_y,
-                cursor_width, // cursor_width
-                cursor_height,
-            ));
+    // Cursor offsets count source characters; the laid-out paragraph indexes
+    // the transformed, kinsoku-shifted builder text.
+    let offsets = crate::shapes::HorizontalOffsets::new(para);
+    let first_rect = |start: usize, end: usize| {
+        laid_out_para
+            .get_rects_for_range(start..end, RectHeightStyle::Max, RectWidthStyle::Tight)
+            .first()
+            .map(|textbox| textbox.rect)
+    };
+    if char_pos >= para_char_count {
+        let last_start = offsets.source_to_builder(para_char_count - 1);
+        let last_end = offsets.source_to_builder(para_char_count);
+        return match first_rect(last_start, last_end) {
+            Some(r) => Rect::from_xywh(r.right(), r.top(), r.width(), r.height()),
+            None => match laid_out_para.get_line_metrics().last() {
+                Some(line) => Rect::from_xywh(
+                    line.left as f32 + line.width as f32,
+                    0.0,
+                    1.0,
+                    laid_out_para.height(),
+                ),
+                None => default_rect(),
+            },
+        };
+    }
+    let start = offsets.source_to_builder(char_pos);
+    let end = offsets.source_to_builder(char_pos + 1);
+    match first_rect(start, end) {
+        Some(rect) => rect,
+        None if char_pos == 0 => default_rect(),
+        None => {
+            // Fallback: use glyph position
+            let pos = laid_out_para.get_glyph_position_at_coordinate((0.0, 0.0));
+            Rect::from_xywh(pos.position as f32, 0.0, 1.0, laid_out_para.height())
         }
-        y_offset += laid_out_para.height();
     }
-
-    None
 }
 
 fn calculate_selection_rects(
@@ -432,4 +395,79 @@ fn calculate_selection_rects(
     }
 
     rects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shapes::{Paragraph, TextAlign, TextDirection, TextSpan};
+    use skia_safe::textlayout::{
+        FontCollection, Paragraph as SkiaParagraph, ParagraphBuilder, ParagraphStyle, TextStyle,
+        TypefaceFontProvider,
+    };
+    use skia_safe::FontMgr;
+
+    fn paragraph(text: &str) -> Paragraph {
+        crate::globals::design_init();
+        let span = TextSpan {
+            text: text.to_string(),
+            font_size: 16.0,
+            ..TextSpan::default()
+        };
+        Paragraph::new(
+            TextAlign::Left,
+            TextDirection::LTR,
+            None,
+            None,
+            1.0,
+            0.0,
+            vec![span],
+        )
+    }
+
+    fn laid_out(text: &str) -> SkiaParagraph {
+        let mut provider = TypefaceFontProvider::new();
+        let typeface = FontMgr::new()
+            .new_from_data(include_bytes!("../fonts/sourcesanspro-regular.ttf"), None)
+            .expect("test font");
+        provider.register_typeface(typeface, Some("test"));
+        let mut fonts = FontCollection::new();
+        fonts.set_default_font_manager(FontMgr::from(provider), None);
+        let mut style = TextStyle::new();
+        style.set_font_families(&["test"]);
+        style.set_font_size(16.0);
+        let mut builder = ParagraphBuilder::new(&ParagraphStyle::default(), &fonts);
+        builder.push_style(&style);
+        builder.add_text(text);
+        let mut paragraph = builder.build();
+        paragraph.layout(1000.0);
+        paragraph
+    }
+
+    fn glyph_rect(laid_out: &SkiaParagraph, range: std::ops::Range<usize>) -> Rect {
+        laid_out.get_rects_for_range(range, RectHeightStyle::Max, RectWidthStyle::Tight)[0].rect
+    }
+
+    #[test]
+    fn caret_inside_the_text_covers_the_character_at_the_offset() {
+        let laid_out = laid_out("abc");
+        let caret = horizontal_caret_rect(&paragraph("abc"), &laid_out, 1);
+        assert_eq!(caret, glyph_rect(&laid_out, 1..2));
+    }
+
+    #[test]
+    fn caret_at_the_end_follows_the_last_character() {
+        let laid_out = laid_out("abc");
+        let caret = horizontal_caret_rect(&paragraph("abc"), &laid_out, 3);
+        let last = glyph_rect(&laid_out, 2..3);
+        assert_eq!(caret.left, last.right);
+        assert_eq!(caret.width(), last.width());
+    }
+
+    #[test]
+    fn caret_in_an_empty_paragraph_spans_its_height() {
+        let laid_out = laid_out("");
+        let caret = horizontal_caret_rect(&paragraph(""), &laid_out, 0);
+        assert_eq!(caret, Rect::from_xywh(0.0, 0.0, 1.0, laid_out.height()));
+    }
 }

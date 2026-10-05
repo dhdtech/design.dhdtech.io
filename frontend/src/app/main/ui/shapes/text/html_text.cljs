@@ -14,18 +14,6 @@
    [app.util.text.writing-mode :as wm]
    [rumext.v2 :as mf]))
 
-(defn- text-children
-  "Text of a node, with each combined digit run of a `digits` tate-chu-yoko
-   in its own `all` span (class `tcy` for generated code)."
-  [text node]
-  (if-let [segments (jl/digit-combine-segments text (:text-combine-upright node))]
-    (into-array
-     (for [[index [run combine?]] (d/enumerate segments)]
-       (if combine?
-         (mf/html [:span.tcy {:key index :style sts/tcy-run-style} run])
-         run)))
-    text))
-
 (mf/defc render-text*
   [{:keys [node parent shape is-code]}]
   (let [text  (:text node)
@@ -37,12 +25,12 @@
     (if (some? ruby)
       [:ruby.ruby-node {:style (sts/generate-ruby-container-styles node)
                         :class (when is-code (dm/str class "-ruby"))}
-       [:span.text-node {:style style :class class} (text-children text node)]
+       [:span.text-node {:style style :class class} (sts/text-children text node)]
        [:rt {:style (sts/generate-ruby-styles shape node)
              :class (when is-code (dm/str class "-rt"))}
         ruby]]
       [:span.text-node {:style style :class class}
-       (if (= text "") "\u00A0" (text-children text node))])))
+       (if (= text "") "\u00A0" (sts/text-children text node))])))
 
 (mf/defc render-root*
   [{:keys [node children shape is-code]}]
@@ -95,7 +83,10 @@
   [{:keys [shape grow-type is-code]} ref]
   (let [{:keys [id x y width height content]} shape
 
-        content (if is-code (legacy.txt/index-content content) content)
+        ;; Generated code keeps the writing mode whatever the renderer.
+        content (if is-code
+                  (legacy.txt/index-content content)
+                  (wm/renderable-content content))
 
         ;; Vertical text anchors columns to the box edges, so it skips the oversized auto-grow box.
         vertical? (wm/vertical-text-content? content)

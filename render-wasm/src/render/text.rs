@@ -16,6 +16,7 @@ use skia_safe::{
     textlayout::{ParagraphBuilder, RectHeightStyle, RectWidthStyle, StyleMetrics, TextDecoration},
     Canvas, ImageFilter, Paint,
 };
+use text_vertical::GlyphOutput;
 
 /// Vertical text: shadows, fill, strokes and the debug grid, all painted from
 /// one layout. Rebinds the content to the selrect: stored text bounds
@@ -43,7 +44,14 @@ pub fn render_vertical_text(
         if !drop_shadows.is_empty() {
             let canvas = state.surfaces.canvas_and_mark_dirty(fills_surface_id);
             for shadow in &drop_shadows {
-                text_vertical::paint_drop_shadow(canvas, &layout, &bounds, vertical_align, shadow);
+                text_vertical::paint_drop_shadow(
+                    canvas,
+                    &layout,
+                    &bounds,
+                    vertical_align,
+                    shadow,
+                    GlyphOutput::Text,
+                );
             }
         }
     }
@@ -54,7 +62,16 @@ pub fn render_vertical_text(
         fills_surface_id,
         blur_filter.as_ref(),
         0.0,
-        |canvas| paint_vertical_fill(canvas, shape, &layout, &bounds, blur_filter.as_ref()),
+        |canvas| {
+            paint_vertical_fill(
+                canvas,
+                shape,
+                &layout,
+                &bounds,
+                blur_filter.as_ref(),
+                GlyphOutput::Text,
+            )
+        },
     )?;
 
     let strokes: Vec<&Stroke> = shape.visible_strokes().rev().collect();
@@ -70,6 +87,7 @@ pub fn render_vertical_text(
                 stroke,
                 &selrect,
                 blur_filter.as_ref(),
+                GlyphOutput::Text,
             );
         }
     }
@@ -364,6 +382,7 @@ pub fn paint_vertical_fill(
     layout: &text_vertical::VerticalLayout,
     bounds: &Rect,
     blur: Option<&ImageFilter>,
+    output: GlyphOutput,
 ) {
     if let Some(blur_filter) = blur {
         let mut blur_paint = Paint::default();
@@ -374,7 +393,7 @@ pub fn paint_vertical_fill(
                 .paint(&blur_paint),
         );
     }
-    text_vertical::paint_layout(canvas, layout, bounds, shape.vertical_align());
+    text_vertical::paint_layout(canvas, layout, bounds, shape.vertical_align(), output);
     if blur.is_some() {
         canvas.restore();
     }
@@ -725,6 +744,7 @@ fn paint_text_with_emoji_overlay(
         text_content,
         &shape.selrect(),
         shape.vertical_align(),
+        crate::render::svg::vertical_glyph_output(),
     ) {
         return;
     }

@@ -7,6 +7,7 @@
 (ns app.main.ui.workspace.sidebar.options.menus.text-japanese-layout
   (:require-macros [app.main.style :as stl])
   (:require
+   [app.common.types.text.japanese-layout :as jl]
    [app.main.ui.components.title-bar :refer [title-bar*]]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
    [app.main.ui.ds.controls.input :refer [input*]]
@@ -104,50 +105,81 @@
                          :name      name
                          :options   options}]]))
 
-(defn- writing-mode-options
-  []
+(defn writing-mode-options
+  [translate]
   [{:value "horizontal-tb"
     :id    "horizontal-tb-writing-mode"
-    :label (tr "workspace.options.text-options.writing-mode-horizontal")
+    :label (translate "workspace.options.text-options.writing-mode-horizontal")
     :icon  i/writing-mode-horizontal}
    {:value "vertical-rl"
     :id    "vertical-rl-writing-mode"
-    :label (tr "workspace.options.text-options.writing-mode-vertical")
+    :label (translate "workspace.options.text-options.writing-mode-vertical")
     :icon  i/writing-mode-vertical}])
 
-(defn- text-orientation-options
-  []
+(defn text-orientation-options
+  [translate]
   [{:value "mixed"
     :id    "mixed-text-orientation"
-    :label (tr "workspace.options.text-options.text-orientation-mixed")
+    :label (translate "workspace.options.text-options.text-orientation-mixed")
     :icon  i/text-orientation-mixed}
    {:value "upright"
     :id    "upright-text-orientation"
-    :label (tr "workspace.options.text-options.text-orientation-upright")
+    :label (translate "workspace.options.text-options.text-orientation-upright")
     :icon  i/text-orientation-upright}])
 
 ;; Warichu (割注): renders the selection as two half-size lines in one inline
 ;; position (top/bottom horizontally, right/left vertically).
-(defn- warichu-options
-  []
+(defn warichu-options
+  [translate]
   [{:value "none"
     :id    "none-warichu"
-    :label (tr "workspace.options.text-options.warichu-none")
+    :label (translate "workspace.options.text-options.warichu-none")
     :icon  i/warichu-none}
    {:value "warichu"
     :id    "warichu-warichu"
-    :label (tr "workspace.options.text-options.warichu")
+    :label (translate "workspace.options.text-options.warichu")
     :icon  i/warichu}])
+
+;; select* matches options by :id, so each id is the stored value.
+(defn text-combine-upright-count-options
+  [translate]
+  [{:id    "digits2"
+    :label (translate "workspace.options.text-options.text-combine-upright-digits-2")}
+   {:id    "digits3"
+    :label (translate "workspace.options.text-options.text-combine-upright-digits-3")}
+   {:id    "digits"
+    :label (translate "workspace.options.text-options.text-combine-upright-digits-4")}])
+
+(defn ruby-size-options
+  [translate]
+  [{:id "half" :label (translate "workspace.options.text-options.ruby-size-half")}
+   {:id "third" :label (translate "workspace.options.text-options.ruby-size-third")}
+   {:id "quarter" :label (translate "workspace.options.text-options.ruby-size-quarter")}])
+
+(defn ruby-align-options
+  [translate]
+  [{:id "space-around" :label (translate "workspace.options.text-options.ruby-align-space-around")}
+   {:id "center" :label (translate "workspace.options.text-options.ruby-align-center")}
+   {:id "start" :label (translate "workspace.options.text-options.ruby-align-start")}
+   {:id "space-between" :label (translate "workspace.options.text-options.ruby-align-space-between")}])
+
+(defn ruby-overhang-options
+  [translate]
+  [{:id "auto" :label (translate "workspace.options.text-options.ruby-overhang-auto")}
+   {:id "none" :label (translate "workspace.options.text-options.ruby-overhang-none")}])
+
+(defn ruby-side-options
+  [translate]
+  [{:id "over" :label (translate "workspace.options.text-options.ruby-side-over")}
+   {:id "under" :label (translate "workspace.options.text-options.ruby-side-under")}])
 
 (mf/defc text-combine-upright-options*
   ;; Digit TCY finds eligible runs itself, so it applies to a whole shape;
   ;; `all` is offered only for a text selection.
   [{:keys [values on-change on-blur text-selection-active]}]
-  (let [text-combine-upright (radio-selected (:text-combine-upright values) "none")
-        digits?  (case text-combine-upright
-                   ("digits" "digits2" "digits3") true
-                   false)
-        selected (if digits? "digits" text-combine-upright)
+  (let [text-combine-upright (radio-selected (:text-combine-upright values)
+                                             (jl/enum-default :text-combine-upright))
+        selected (if (jl/digit-combine? text-combine-upright) "digits" text-combine-upright)
         options
         (mf/with-memo [text-selection-active]
           (text-combine-upright-options text-selection-active tr))
@@ -167,19 +199,10 @@
 
 (mf/defc text-combine-upright-count-options*
   [{:keys [values on-change on-blur]}]
-  (let [text-combine-upright (radio-selected (:text-combine-upright values) "none")
-        digits? (case text-combine-upright
-                  ("digits" "digits2" "digits3") true
-                  false)
-        options
-        (mf/with-memo []
-          ;; select* matches options by :id, so the id is the stored value.
-          [{:id    "digits2"
-            :label (tr "workspace.options.text-options.text-combine-upright-digits-2")}
-           {:id    "digits3"
-            :label (tr "workspace.options.text-options.text-combine-upright-digits-3")}
-           {:id    "digits"
-            :label (tr "workspace.options.text-options.text-combine-upright-digits-4")}])
+  (let [text-combine-upright (radio-selected (:text-combine-upright values)
+                                             (jl/enum-default :text-combine-upright))
+        digits?  (jl/digit-combine? text-combine-upright)
+        options  (mf/with-memo [] (text-combine-upright-count-options tr))
 
         handle-change
         (mf/use-fn
@@ -296,39 +319,33 @@
 (mf/defc ruby-customization-options*
   [{:keys [values on-change on-blur]}]
   (let [common-props (ruby-common-props values on-change on-blur)
-        size-options [{:id "half" :label (tr "workspace.options.text-options.ruby-size-half")}
-                      {:id "third" :label (tr "workspace.options.text-options.ruby-size-third")}
-                      {:id "quarter" :label (tr "workspace.options.text-options.ruby-size-quarter")}]
-        align-options [{:id "space-around" :label (tr "workspace.options.text-options.ruby-align-space-around")}
-                       {:id "center" :label (tr "workspace.options.text-options.ruby-align-center")}
-                       {:id "start" :label (tr "workspace.options.text-options.ruby-align-start")}
-                       {:id "space-between" :label (tr "workspace.options.text-options.ruby-align-space-between")}]
-        overhang-options [{:id "auto" :label (tr "workspace.options.text-options.ruby-overhang-auto")}
-                          {:id "none" :label (tr "workspace.options.text-options.ruby-overhang-none")}]
-        side-options [{:id "over" :label (tr "workspace.options.text-options.ruby-side-over")}
-                      {:id "under" :label (tr "workspace.options.text-options.ruby-side-under")}]]
+        options      (mf/with-memo []
+                       {:ruby-size     (ruby-size-options tr)
+                        :ruby-align    (ruby-align-options tr)
+                        :ruby-overhang (ruby-overhang-options tr)
+                        :ruby-side     (ruby-side-options tr)})]
     [:div {:class (stl/css :japanese-layout-controls)}
      [:> ruby-hidden-option* common-props]
      [:> span-select-option* (mf/spread-props common-props
                                               {:attr :ruby-size
-                                               :default-value "half"
+                                               :default-value (jl/enum-default :ruby-size)
                                                :label (tr "workspace.options.text-options.ruby-size")
-                                               :options size-options})]
+                                               :options (:ruby-size options)})]
      [:> span-select-option* (mf/spread-props common-props
                                               {:attr :ruby-align
-                                               :default-value "space-around"
+                                               :default-value (jl/enum-default :ruby-align)
                                                :label (tr "workspace.options.text-options.ruby-align")
-                                               :options align-options})]
+                                               :options (:ruby-align options)})]
      [:> span-select-option* (mf/spread-props common-props
                                               {:attr :ruby-overhang
-                                               :default-value "auto"
+                                               :default-value (jl/enum-default :ruby-overhang)
                                                :label (tr "workspace.options.text-options.ruby-overhang")
-                                               :options overhang-options})]
+                                               :options (:ruby-overhang options)})]
      [:> span-select-option* (mf/spread-props common-props
                                               {:attr :ruby-side
-                                               :default-value "over"
+                                               :default-value (jl/enum-default :ruby-side)
                                                :label (tr "workspace.options.text-options.ruby-side")
-                                               :options side-options})]]))
+                                               :options (:ruby-side options)})]]))
 
 (mf/defc ruby-advanced-options*
   [{:keys [values on-change on-blur]}]
@@ -428,9 +445,9 @@
                                   :on-change on-ruby-presentation-change
                                   :on-blur   on-blur})
         options                 (mf/with-memo []
-                                  {:writing-mode         (writing-mode-options)
-                                   :text-orientation     (text-orientation-options)
-                                   :warichu              (warichu-options)
+                                  {:writing-mode         (writing-mode-options tr)
+                                   :text-orientation     (text-orientation-options tr)
+                                   :warichu              (warichu-options tr)
                                    :text-emphasis        (text-emphasis-options)
                                    :annotation-clearance (annotation-clearance-options)})]
 
@@ -439,7 +456,7 @@
       [:div {:class (stl/css :japanese-icon-options)}
        [:> attr-radio-options* (mf/spread-props common-props
                                                 {:attr          :writing-mode
-                                                 :default-value "horizontal-tb"
+                                                 :default-value (jl/enum-default :writing-mode)
                                                  :name          "writing-mode-options"
                                                  :class         (stl/css :writing-mode-options)
                                                  :options       (:writing-mode options)})]
@@ -449,7 +466,7 @@
           ;; select "mixed".
           [:> attr-radio-options* (mf/spread-props common-props
                                                    {:attr          :text-orientation
-                                                    :default-value "mixed"
+                                                    :default-value (jl/enum-default :text-orientation)
                                                     :name          "text-orientation-options"
                                                     :class         (stl/css :text-orientation-options)
                                                     :options       (:text-orientation options)})]
@@ -459,7 +476,7 @@
        (when ^boolean text-selection-active
          [:> attr-radio-options* (mf/spread-props common-props
                                                   {:attr          :warichu
-                                                   :default-value "none"
+                                                   :default-value (jl/enum-default :warichu)
                                                    :name          "warichu-options"
                                                    :class         (stl/css :warichu-options)
                                                    :options       (:warichu options)})])]
@@ -470,12 +487,12 @@
       (when ^boolean text-selection-active
         [:> span-select-option* (mf/spread-props common-props
                                                  {:attr          :text-emphasis
-                                                  :default-value "none"
+                                                  :default-value (jl/enum-default :text-emphasis)
                                                   :label         (tr "workspace.options.text-options.text-emphasis")
                                                   :options       (:text-emphasis options)})])
       [:> span-select-option* (mf/spread-props common-props
                                                {:attr          :annotation-clearance
-                                                :default-value "none"
+                                                :default-value (jl/enum-default :annotation-clearance)
                                                 :label         (tr "workspace.options.text-options.annotation-clearance")
                                                 :options       (:annotation-clearance options)})]
       (if text-selection-active

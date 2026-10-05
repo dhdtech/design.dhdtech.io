@@ -7,6 +7,7 @@
 (ns frontend-tests.ui.text-options-test
   (:require
    ["react-dom/server" :as rds]
+   [app.common.types.text.japanese-layout :as jl]
    [app.main.data.workspace.texts :as dwt]
    [app.main.ui.ds.controls.select :as select]
    [app.main.ui.shapes.text.html-text :as html-text]
@@ -116,7 +117,7 @@
                         :ruby-hidden false
                         :ruby-size "quarter"}]}]}]}}
         values  (dwt/current-ruby-values {:shape shape
-                                          :attrs dwt/ruby-presentation-attrs})
+                                          :attrs jl/ruby-presentation-attrs})
         updated (dwt/update-ruby-presentation-attrs
                  shape {:ruby-hidden true :ruby-size "third"})
         spans   (get-in updated [:content :children 0 :children 0 :children])]
@@ -212,3 +213,35 @@
            (tjl/proportional-metrics-feature nil)))
   (t/is (= "vpal"
            (tjl/proportional-metrics-feature "vertical-rl"))))
+
+(t/deftest sidebar-options-offer-the-japanese-enum-values
+  (let [ids    #(mapv :id %)
+        values #(mapv :value %)]
+    (t/is (= (:writing-mode jl/enum-values) (values (tjl/writing-mode-options identity))))
+    (t/is (= (:text-orientation jl/enum-values) (values (tjl/text-orientation-options identity))))
+    (t/is (= (:warichu jl/enum-values) (values (tjl/warichu-options identity))))
+    (t/is (= (:text-emphasis jl/enum-values) (ids (tjl/text-emphasis-options identity))))
+    (t/is (= (:annotation-clearance jl/enum-values) (ids (tjl/annotation-clearance-options identity))))
+    (t/is (= (:ruby-size jl/enum-values) (ids (tjl/ruby-size-options identity))))
+    (t/is (= (:ruby-align jl/enum-values) (ids (tjl/ruby-align-options identity))))
+    (t/is (= (:ruby-overhang jl/enum-values) (ids (tjl/ruby-overhang-options identity))))
+    (t/is (= (:ruby-side jl/enum-values) (ids (tjl/ruby-side-options identity))))
+    (t/is (every? #(jl/valid-enum-value? :text-combine-upright %)
+                  (values (tjl/text-combine-upright-options true identity))))
+    (t/is (every? jl/digit-combine? (ids (tjl/text-combine-upright-count-options identity))))))
+
+(t/deftest html-text-drops-vertical-writing-under-a-horizontal-renderer
+  (let [shape  {:id (random-uuid) :width 100 :height 100
+                :content {:type "root"
+                          :children
+                          [{:type "paragraph-set"
+                            :children
+                            [{:type "paragraph"
+                              :writing-mode "vertical-rl"
+                              :text-orientation "upright"
+                              :children [{:text "縦"}]}]}]}}
+        markup #(rds/renderToStaticMarkup (mf/element html-text/text-shape* #js {:shape shape}))]
+    (with-redefs [wm/vertical-layout-active? (constantly false)]
+      (t/is (not (str/includes? (markup) "vertical-rl"))))
+    (with-redefs [wm/vertical-layout-active? (constantly true)]
+      (t/is (str/includes? (markup) "writing-mode:vertical-rl")))))

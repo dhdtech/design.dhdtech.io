@@ -115,8 +115,8 @@
         text-direction   (sr/translate-text-direction (get paragraph :text-direction))
         text-decoration  (sr/translate-text-decoration (get paragraph :text-decoration))
         text-transform   (sr/translate-text-transform (get paragraph :text-transform))
-        writing-mode     (sr/translate-writing-mode (get paragraph :writing-mode))
-        text-orientation (sr/translate-text-orientation (get paragraph :text-orientation))
+        writing-mode     (sr/translate-japanese-enum :writing-mode (get paragraph :writing-mode))
+        text-orientation (sr/translate-japanese-enum :text-orientation (get paragraph :text-orientation))
         line-height      (serialize-line-height (get paragraph :line-height))
         letter-spacing   (serialize-letter-spacing (get paragraph :letter-spacing))]
     (-> offset
@@ -163,17 +163,18 @@
              text-direction  (or (sr/translate-text-direction (:text-direction span))
                                  (sr/translate-text-direction (:text-direction paragraph))
                                  (sr/translate-text-direction "ltr"))
-             text-orientation     (sr/translate-text-orientation
+             text-orientation     (sr/translate-japanese-enum
+                                   :text-orientation
                                    (get span :text-orientation (get paragraph :text-orientation)))
-             text-combine-upright (sr/translate-text-combine-upright (get span :text-combine-upright))
-             text-emphasis        (sr/translate-text-emphasis (get span :text-emphasis))
-             warichu              (sr/translate-warichu (get span :warichu))
-             font-features        (sr/translate-font-features (get span :font-features))
-             annotation-clearance (sr/translate-annotation-clearance (get span :annotation-clearance))
-             ruby-size            (sr/translate-ruby-size (get span :ruby-size))
-             ruby-align           (sr/translate-ruby-align (get span :ruby-align))
-             ruby-overhang        (sr/translate-ruby-overhang (get span :ruby-overhang))
-             ruby-side            (sr/translate-ruby-side (get span :ruby-side))]
+             text-combine-upright (sr/translate-japanese-enum :text-combine-upright (get span :text-combine-upright))
+             text-emphasis        (sr/translate-japanese-enum :text-emphasis (get span :text-emphasis))
+             warichu              (sr/translate-japanese-enum :warichu (get span :warichu))
+             font-features        (sr/translate-japanese-enum :font-features (get span :font-features))
+             annotation-clearance (sr/translate-japanese-enum :annotation-clearance (get span :annotation-clearance))
+             ruby-size            (sr/translate-japanese-enum :ruby-size (get span :ruby-size))
+             ruby-align           (sr/translate-japanese-enum :ruby-align (get span :ruby-align))
+             ruby-overhang        (sr/translate-japanese-enum :ruby-overhang (get span :ruby-overhang))
+             ruby-side            (sr/translate-japanese-enum :ruby-side (get span :ruby-side))]
          (-> offset
              (mem/write-u8 dview font-style)
              (mem/write-u8 dview text-decoration)

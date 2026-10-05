@@ -9,10 +9,12 @@
     [app.common.data :as d]
     [app.common.data.macros :as dm]
     [app.common.files.helpers :as cfh]
+    [app.common.logging :as log]
     [app.common.render-wasm.serializers.color :as sr-clr]
     [app.common.render-wasm.wasm :as wasm]
     [app.common.types.color :as clr]
     [app.common.types.shape-tree :as ctst]
+    [app.common.types.text.japanese-layout :as jl]
     [app.common.uuid :as uuid]
     [cuerdas.core :as str]))
 
@@ -302,58 +304,21 @@
   [text-direction]
   (untranslate "text-direction" text-direction "ltr"))
 
-(defn- translate-enum
-  "Wasm discriminant of the `id` enum variant named `value`, falling back to
-   the `default` variant. 0 when the enum is not exported."
-  [id value default]
-  (if-let [values (unchecked-get wasm/serializers id)]
-    (d/nilv (unchecked-get values (d/name value))
-            (unchecked-get values default))
-    0))
-
-(defn translate-writing-mode
-  [value]
-  (translate-enum "writing-mode" value "horizontal-tb"))
-
-(defn translate-text-orientation
-  [value]
-  (translate-enum "text-orientation" value "mixed"))
-
-(defn translate-text-combine-upright
-  [value]
-  (translate-enum "text-combine-upright" value "none"))
-
-(defn translate-text-emphasis
-  [value]
-  (translate-enum "text-emphasis" value "none"))
-
-(defn translate-warichu
-  [value]
-  (translate-enum "warichu" value "none"))
-
-(defn translate-font-features
-  [value]
-  (translate-enum "font-features" value "none"))
-
-(defn translate-annotation-clearance
-  [value]
-  (translate-enum "annotation-clearance" value "none"))
-
-(defn translate-ruby-size
-  [value]
-  (translate-enum "ruby-size" value "half"))
-
-(defn translate-ruby-align
-  [value]
-  (translate-enum "ruby-align" value "space-around"))
-
-(defn translate-ruby-overhang
-  [value]
-  (translate-enum "ruby-overhang" value "auto"))
-
-(defn translate-ruby-side
-  [value]
-  (translate-enum "ruby-side" value "over"))
+(defn translate-japanese-enum
+  "Wasm discriminant of the value of the Japanese layout enum `attr`. An
+   unset value takes the default; an unknown one also takes it, with a
+   warning, since content validation should have rejected it. 0 when the
+   enum is not exported."
+  [attr value]
+  (let [default (jl/enum-default attr)
+        value   (some-> value d/name)
+        value   (if (str/blank? value) default value)]
+    (if-let [values (unchecked-get wasm/serializers (name attr))]
+      (if-let [discriminant (unchecked-get values value)]
+        discriminant
+        (do (log/wrn :hint "unknown japanese layout value" :attr attr :value value)
+            (unchecked-get values default)))
+      0)))
 
 (defn translate-font-style
   [font-style]

@@ -15,13 +15,16 @@
    [app.common.types.text :as txt]
    [app.common.uuid :as uuid]
    [app.main.data.workspace.modifiers :as dwm]
+   [app.main.data.workspace.shapes :as dwsh]
    [app.main.data.workspace.texts :as dwt]
    [app.main.data.workspace.texts-events :as dwte]
    [app.main.data.workspace.wasm-text :as dwwt]
    [app.main.ui.shapes.text.styles :as text.styles]
    [app.main.ui.workspace.shapes.text.viewport-texts-html :as vth]
+   [beicon.v2.core :as rx]
    [cljs.test :as t :include-macros true]
-   [frontend-tests.helpers.state :as ths]))
+   [frontend-tests.helpers.state :as ths]
+   [potok.v2.core :as ptk]))
 
 (defn- text-content
   [writing-mode]
@@ -53,12 +56,10 @@
   (let [vertical   (text.styles/generate-paragraph-styles
                     nil
                     {:writing-mode "vertical-rl"
-                     :text-orientation "upright"}
-                    true)
+                     :text-orientation "upright"})
         horizontal (text.styles/generate-paragraph-styles
                     nil
-                    {:writing-mode "horizontal-tb"}
-                    true)]
+                    {:writing-mode "horizontal-tb"})]
     (t/is (= "vertical-rl" (aget vertical "writingMode")))
     (t/is (= "upright" (aget vertical "textOrientation")))
     (t/is (= "normal" (aget vertical "textAutospace")))
@@ -87,7 +88,7 @@
                 :text-emphasis "filled-dot"
                 :font-size "20"
                 :fills [{:fill-color "#000000" :fill-opacity 1}]})]
-    (t/is (= "auto" (aget style "--annotation-clearance")))
+    (t/is (nil? (aget style "--annotation-clearance")))
     (t/is (= "calc(max(var(--paragraph-line-height, 1.2), 1.2) + 1)"
              (aget style "lineHeight")))))
 
@@ -735,3 +736,18 @@
     (t/is (true? (dwt/single-span-range? content 0 2)))
     (t/is (true? (dwt/single-span-range? content 3 5)))
     (t/is (false? (dwt/single-span-range? content 1 4)))))
+
+(t/deftest ruby-presentation-of-several-texts-is-one-shape-update
+  (let [file-id (uuid/next)
+        page-id (uuid/next)
+        ids     [(uuid/next) (uuid/next) (uuid/next)]
+        objects (into {} (map (fn [id] [id {:id id :type :text}])) ids)
+        state   {:current-file-id file-id
+                 :current-page-id page-id
+                 :features #{}
+                 :files {file-id {:data {:pages-index {page-id {:objects objects}}}}}}
+        events  (atom [])]
+    (->> (ptk/watch (dwt/update-all-ruby-presentation ids {:ruby-size "third"}) state nil)
+         (rx/subs! #(swap! events conj %)))
+    (let [updates (filter #(= ::dwsh/update-shapes (ptk/type %)) @events)]
+      (t/is (= 1 (count updates))))))

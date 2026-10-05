@@ -12,6 +12,17 @@ use super::font_tables::upright_baseline;
 use super::layout::{column_base_center, CellKind, VerticalCell, VerticalLayout};
 use super::shaping::{single_glyph_blob, ShapedRun};
 
+/// How glyphs reach the canvas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GlyphOutput {
+    /// Text blobs.
+    Text,
+    /// Glyph outlines. SVG export needs them: `SkSVGDevice` rebuilds `<text>`
+    /// from glyph IDs through the font's cmap, which loses vertical
+    /// alternates.
+    Outlines,
+}
+
 /// One text blob drawn at `offset` in the local space that `transform` maps
 /// to the layout's content space (identity when `None`). Canvas painting and
 /// outline export share these draws, so they match for every cell kind.
@@ -39,8 +50,8 @@ impl GlyphDraw {
     }
 
     /// Draws with the content origin at `origin`.
-    fn draw(&self, canvas: &Canvas, paint: &Paint, origin: SkPoint) {
-        if crate::render::svg::writing_svg() {
+    fn draw(&self, canvas: &Canvas, paint: &Paint, origin: SkPoint, output: GlyphOutput) {
+        if output == GlyphOutput::Outlines {
             canvas.draw_path(&self.path(origin), paint);
             return;
         }
@@ -300,57 +311,94 @@ fn decoration_rects(
     rects
 }
 
-/// Fill pass: each cell drawn with its own fill paint and its decorations,
-/// then ruby and emphasis marks with their base cell's paint.
-pub fn paint_layout(
-    canvas: &Canvas,
+/// A glyph draw or a decoration bar of the layout.
+enum LayoutItem<'a> {
+    Glyphs(&'a GlyphDraw),
+    Bar(skia::Rect),
+}
+
+/// Every glyph draw and decoration bar of the layout, with its content origin
+/// at `origin`, and the fill paint of its span. Paint order: each cell's
+/// glyphs and bars, then ruby, then emphasis marks.
+fn for_each_item(
     layout: &VerticalLayout,
-    bounds: &Rect,
-    vertical_align: VerticalAlign,
+    origin: (f32, f32),
+    mut visit: impl FnMut(LayoutItem, &Paint),
 ) {
-    let origin = layout.origin(bounds, vertical_align);
     let draws = layout_draws(layout);
     for (cell, cell_draws) in layout.cells.iter().zip(&draws.cells) {
         let paint = &layout.paints[cell.paint];
         for draw in cell_draws {
-            draw.draw(canvas, paint, origin.into());
+            visit(LayoutItem::Glyphs(draw), paint);
         }
-        let mut decoration_paint = paint.clone();
-        decoration_paint.set_style(skia::PaintStyle::Fill);
-        decoration_paint.set_anti_alias(true);
         for rect in decoration_rects(layout, cell, origin) {
-            canvas.draw_rect(rect, &decoration_paint);
+            visit(LayoutItem::Bar(rect), paint);
         }
     }
     for (ruby, ruby_draws) in layout.ruby_cells.iter().zip(&draws.ruby) {
         for draw in ruby_draws {
-            draw.draw(canvas, &layout.paints[ruby.paint], origin.into());
+            visit(LayoutItem::Glyphs(draw), &layout.paints[ruby.paint]);
         }
     }
     for (mark, draw) in layout.emphasis_marks.iter().zip(&draws.emphasis) {
         if let Some(draw) = draw {
-            draw.draw(
-                canvas,
+            visit(
+                LayoutItem::Glyphs(draw),
                 &layout.paints[layout.cells[mark.cell].paint],
-                origin.into(),
             );
         }
     }
 }
 
-/// Paint every cell's glyphs with a single overriding paint (stroke /
-/// shadow silhouette passes).
+/// Paint every item of the layout with its span's fill paint, or with
+/// `single_paint` for every item (stroke, shadow and silhouette passes).
+fn paint_items(
+    canvas: &Canvas,
+    layout: &VerticalLayout,
+    bounds: &Rect,
+    vertical_align: VerticalAlign,
+    single_paint: Option<&Paint>,
+    output: GlyphOutput,
+) {
+    let origin = layout.origin(bounds, vertical_align);
+    for_each_item(layout, origin, |item, fill| {
+        let paint = single_paint.unwrap_or(fill);
+        match item {
+            LayoutItem::Glyphs(draw) => draw.draw(canvas, paint, origin.into(), output),
+            LayoutItem::Bar(rect) => {
+                let mut bar_paint = paint.clone();
+                if single_paint.is_none() {
+                    bar_paint.set_style(skia::PaintStyle::Fill);
+                }
+                bar_paint.set_anti_alias(true);
+                canvas.draw_rect(rect, &bar_paint);
+            }
+        }
+    });
+}
+
+/// Fill pass: every glyph and decoration with its span's fill paint.
+pub fn paint_layout(
+    canvas: &Canvas,
+    layout: &VerticalLayout,
+    bounds: &Rect,
+    vertical_align: VerticalAlign,
+    output: GlyphOutput,
+) {
+    paint_items(canvas, layout, bounds, vertical_align, None, output);
+}
+
+/// Paint every glyph and decoration with one `paint` (stroke / shadow
+/// silhouette passes).
 fn paint_glyphs(
     canvas: &Canvas,
     layout: &VerticalLayout,
     bounds: &Rect,
     vertical_align: VerticalAlign,
     paint: &Paint,
+    output: GlyphOutput,
 ) {
-    let origin = layout.origin(bounds, vertical_align);
-    for draw in layout_draws(layout).cells.iter().flatten() {
-        draw.draw(canvas, paint, origin.into());
-    }
+    paint_items(canvas, layout, bounds, vertical_align, Some(paint), output);
 }
 
 /// Paint the text content vertically inside its bounds. Returns false
@@ -361,12 +409,13 @@ pub fn paint_text_vertical(
     text_content: &TextContent,
     bounds: &Rect,
     vertical_align: VerticalAlign,
+    output: GlyphOutput,
 ) -> bool {
     if !text_content.is_vertical() {
         return false;
     }
     let layout = text_content.vertical_layout(bounds);
-    paint_layout(canvas, &layout, bounds, vertical_align);
+    paint_layout(canvas, &layout, bounds, vertical_align, output);
     true
 }
 
@@ -379,12 +428,13 @@ pub fn paint_text_vertical_with(
     bounds: &Rect,
     vertical_align: VerticalAlign,
     paint: &Paint,
+    output: GlyphOutput,
 ) -> bool {
     if !text_content.is_vertical() {
         return false;
     }
     let layout = text_content.vertical_layout(bounds);
-    paint_glyphs(canvas, &layout, bounds, vertical_align, paint);
+    paint_glyphs(canvas, &layout, bounds, vertical_align, paint, output);
     true
 }
 
@@ -398,36 +448,13 @@ fn paths_from_layout(
 ) -> Vec<(skia::Path, Paint)> {
     let mut paths = Vec::new();
     let origin = layout.origin(bounds, vertical_align);
-    let draws = layout_draws(layout);
-    for (cell, cell_draws) in layout.cells.iter().zip(&draws.cells) {
-        let paint = &layout.paints[cell.paint];
-        for draw in cell_draws {
-            push_text_path(&mut paths, draw.path(origin.into()), paint, antialias);
-        }
-        for rect in decoration_rects(layout, cell, origin) {
-            push_text_path(&mut paths, skia::Path::rect(rect, None), paint, antialias);
-        }
-    }
-    for (ruby, ruby_draws) in layout.ruby_cells.iter().zip(&draws.ruby) {
-        for draw in ruby_draws {
-            push_text_path(
-                &mut paths,
-                draw.path(origin.into()),
-                &layout.paints[ruby.paint],
-                antialias,
-            );
-        }
-    }
-    for (mark, draw) in layout.emphasis_marks.iter().zip(&draws.emphasis) {
-        if let Some(draw) = draw {
-            push_text_path(
-                &mut paths,
-                draw.path(origin.into()),
-                &layout.paints[layout.cells[mark.cell].paint],
-                antialias,
-            );
-        }
-    }
+    for_each_item(layout, origin, |item, paint| {
+        let path = match item {
+            LayoutItem::Glyphs(draw) => draw.path(origin.into()),
+            LayoutItem::Bar(rect) => skia::Path::rect(rect, None),
+        };
+        push_text_path(&mut paths, path, paint, antialias);
+    });
     paths
 }
 
@@ -537,16 +564,18 @@ pub fn paint_drop_shadow(
     bounds: &Rect,
     vertical_align: VerticalAlign,
     shadow_paint: &Paint,
+    output: GlyphOutput,
 ) {
     let mut paint = shadow_paint.clone();
     paint.set_color(skia::Color::BLACK);
     paint.set_anti_alias(true);
-    paint_glyphs(canvas, layout, bounds, vertical_align, &paint);
+    paint_glyphs(canvas, layout, bounds, vertical_align, &paint, output);
 }
 
 /// Paint a stroke on the vertical glyphs. Center strokes draw directly;
 /// inner/outer strokes mask with `SrcIn` / `SrcOut` against the glyph
 /// silhouette, as the horizontal path does.
+#[allow(clippy::too_many_arguments)]
 pub fn paint_stroke(
     canvas: &Canvas,
     layout: &VerticalLayout,
@@ -555,6 +584,7 @@ pub fn paint_stroke(
     stroke: &Stroke,
     selrect: &Rect,
     blur: Option<&ImageFilter>,
+    output: GlyphOutput,
 ) {
     let (stroke_paints, layer_opacity) =
         crate::render::text::get_text_stroke_paints(stroke, selrect, false);
@@ -573,7 +603,7 @@ pub fn paint_stroke(
     for stroke_paint in &stroke_paints {
         match stroke.kind {
             StrokeKind::Center => {
-                paint_glyphs(canvas, layout, bounds, vertical_align, stroke_paint)
+                paint_glyphs(canvas, layout, bounds, vertical_align, stroke_paint, output)
             }
             StrokeKind::Inner => paint_masked_stroke(
                 canvas,
@@ -582,6 +612,7 @@ pub fn paint_stroke(
                 vertical_align,
                 stroke_paint,
                 BlendMode::SrcIn,
+                output,
             ),
             StrokeKind::Outer => paint_masked_stroke(
                 canvas,
@@ -590,6 +621,7 @@ pub fn paint_stroke(
                 vertical_align,
                 stroke_paint,
                 BlendMode::SrcOut,
+                output,
             ),
         }
     }
@@ -602,6 +634,7 @@ pub fn paint_stroke(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_masked_stroke(
     canvas: &Canvas,
     layout: &VerticalLayout,
@@ -609,18 +642,19 @@ fn paint_masked_stroke(
     vertical_align: VerticalAlign,
     stroke_paint: &Paint,
     blend: BlendMode,
+    output: GlyphOutput,
 ) {
     let mut mask = Paint::default();
     mask.set_color(skia::Color::BLACK);
     mask.set_anti_alias(true);
 
     canvas.save_layer(&SaveLayerRec::default());
-    paint_glyphs(canvas, layout, bounds, vertical_align, &mask);
+    paint_glyphs(canvas, layout, bounds, vertical_align, &mask, output);
 
     let mut blend_paint = Paint::default();
     blend_paint.set_blend_mode(blend);
     canvas.save_layer(&SaveLayerRec::default().paint(&blend_paint));
-    paint_glyphs(canvas, layout, bounds, vertical_align, stroke_paint);
+    paint_glyphs(canvas, layout, bounds, vertical_align, stroke_paint, output);
     canvas.restore();
 
     canvas.restore();
@@ -809,7 +843,56 @@ mod tests {
             &layout,
             &content.bounds(),
             VerticalAlign::Top,
+            GlyphOutput::Text,
         );
+    }
+
+    /// Pixels with any ink inside `rect`.
+    fn inked_pixels(surface: &mut skia::Surface, rect: skia::Rect) -> usize {
+        let image = surface.image_snapshot();
+        let pixmap = image.peek_pixels().expect("raster pixels");
+        let mut inked = 0;
+        for y in rect.top.max(0.0) as i32..rect.bottom.min(image.height() as f32) as i32 {
+            for x in rect.left.max(0.0) as i32..rect.right.min(image.width() as f32) as i32 {
+                if pixmap.get_color((x, y)).a() > 0 {
+                    inked += 1;
+                }
+            }
+        }
+        inked
+    }
+
+    #[test]
+    fn single_paint_passes_cover_ruby_like_the_fill_pass() {
+        let content = spans_content(
+            vec![TextSpan {
+                ruby: "あ".to_string(),
+                ..make_span("く")
+            }],
+            400.0,
+        );
+        let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
+        let bounds = content.bounds();
+        let ruby = &layout.ruby_cells[0];
+        let column = &layout.columns[ruby.column];
+        let (origin_x, origin_y) = layout.origin(&bounds, VerticalAlign::Top);
+        let strip_x =
+            origin_x + ruby_strip_x(column, ruby.font_size, ruby.base_font_size, ruby.side);
+        let strip = skia::Rect::from_xywh(strip_x, origin_y, ruby.font_size, 400.0);
+
+        let mut surface = skia::surfaces::raster_n32_premul((256, 512)).unwrap();
+        let mut stroke = Paint::default();
+        stroke.set_color(skia::Color::BLACK);
+        paint_glyphs(
+            surface.canvas(),
+            &layout,
+            &bounds,
+            VerticalAlign::Top,
+            &stroke,
+            GlyphOutput::Text,
+        );
+
+        assert!(inked_pixels(&mut surface, strip) > 0, "the ruby is painted");
     }
 
     #[test]
@@ -827,13 +910,20 @@ mod tests {
         canvas.translate((12.0, 8.0));
         canvas.rotate(7.0, Some((64.0, 64.0).into()));
 
-        paint_layout(canvas, &layout, &bounds, VerticalAlign::Top);
+        paint_layout(
+            canvas,
+            &layout,
+            &bounds,
+            VerticalAlign::Top,
+            GlyphOutput::Text,
+        );
         paint_drop_shadow(
             canvas,
             &layout,
             &bounds,
             VerticalAlign::Top,
             &Paint::default(),
+            GlyphOutput::Text,
         );
 
         // A real drop-shadow image filter, as `drop_shadow_paints` builds.
@@ -846,7 +936,14 @@ mod tests {
             None,
             None,
         ));
-        paint_drop_shadow(canvas, &layout, &bounds, VerticalAlign::Top, &shadow_paint);
+        paint_drop_shadow(
+            canvas,
+            &layout,
+            &bounds,
+            VerticalAlign::Top,
+            &shadow_paint,
+            GlyphOutput::Text,
+        );
 
         for kind in [
             Stroke::new_center_stroke(3.0, StrokeStyle::Solid, None, None, None, None),
@@ -861,6 +958,7 @@ mod tests {
                 &kind,
                 &selrect,
                 None,
+                GlyphOutput::Text,
             );
         }
     }
@@ -875,7 +973,13 @@ mod tests {
         {
             let document = skia::pdf::new_document(&mut bytes, Some(&metadata));
             let mut page = document.begin_page((400.0, 400.0), None);
-            paint_layout(page.canvas(), layout, bounds, VerticalAlign::Top);
+            paint_layout(
+                page.canvas(),
+                layout,
+                bounds,
+                VerticalAlign::Top,
+                GlyphOutput::Text,
+            );
             page.end_page().close();
         }
         bytes.iter().map(|byte| *byte as char).collect()

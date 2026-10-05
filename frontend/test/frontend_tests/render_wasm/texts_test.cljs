@@ -10,7 +10,10 @@
    classification used to pick Noto fallback fonts."
   (:require
    [app.common.fonts :as cfnt]
+   [app.common.render-wasm.serializers :as sr]
    [app.common.render-wasm.text-content :as tc]
+   [app.common.render-wasm.wasm :as wasm]
+   [app.common.types.text.japanese-layout :as jl]
    [app.main.ui.workspace.shapes.text.v3-editor :as v3-editor]
    [app.render-wasm.api :as api]
    [app.render-wasm.api.texts :as texts]
@@ -279,3 +282,15 @@
   ;; A kanji-only Japanese address resolves to Japanese under a ja locale.
   (t/is (= #{:japanese}
            (cfnt/resolve-ambiguous-cjk (langs "東京都渋谷区神南一丁目") "ja"))))
+
+(t/deftest wasm-enum-exports-match-the-japanese-value-table
+  (doseq [[attr values] jl/enum-values]
+    (let [exported (js->clj (unchecked-get wasm/serializers (name attr)))]
+      (t/is (= values (mapv key (sort-by val exported))) (name attr)))))
+
+(t/deftest unset-or-unknown-japanese-values-serialize-as-the-default
+  (t/is (= 0 (sr/translate-japanese-enum :ruby-side nil)))
+  (t/is (= 0 (sr/translate-japanese-enum :ruby-side "")))
+  (t/is (= 0 (sr/translate-japanese-enum :ruby-side "left")))
+  (t/is (= 1 (sr/translate-japanese-enum :ruby-side "under")))
+  (t/is (= 1 (sr/translate-japanese-enum :ruby-side :under))))

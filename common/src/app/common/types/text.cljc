@@ -104,20 +104,14 @@
   (d/concat-vec
    text-align-attrs
    text-direction-attrs
-   jl/text-writing-mode-attrs
-   jl/text-orientation-attrs))
+   jl/whole-shape-paragraph-attrs))
 
 (def text-node-attrs
   (d/concat-vec
    text-typography-attrs
    text-font-attrs
    text-spacing-attrs
-   jl/text-combine-upright-attrs
-   jl/text-emphasis-attrs
-   jl/text-ruby-attrs
-   jl/text-warichu-attrs
-   jl/text-font-features-attrs
-   jl/text-annotation-clearance-attrs
+   jl/span-attrs
    text-decoration-attrs
    text-transform-attrs
    text-fills))
