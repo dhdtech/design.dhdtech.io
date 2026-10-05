@@ -13,6 +13,8 @@ use skia_safe::{
 use crate::render::DEFAULT_EMOJI_FONT;
 use crate::shapes::{FontFeatures, TextSpan};
 
+use super::font_tables::upright_centre_metrics;
+
 /// JLREQ preferred width of a word space inside sideways Western text.
 pub(super) const WESTERN_WORD_SPACING_EM: f32 = 1.0 / 3.0;
 
@@ -451,16 +453,16 @@ pub(super) fn rotated_baseline_shift(top: f32, bottom: f32) -> f32 {
 }
 
 /// Shift that puts the font's central baseline on the column axis: the
-/// middle of its em box, derived from ascent/descent scaled to 1em (CSS
-/// `central` for fonts without a BASE table). It depends only on the font,
-/// so every sideways run of a face shares one baseline whatever its ink.
+/// middle of the em box upright glyphs centre on (`upright_centre_metrics`),
+/// scaled to 1em. It depends only on the font, so every sideways run of a
+/// face shares one baseline whatever its ink.
 fn central_baseline_shift(font: &Font) -> f32 {
-    let (_, metrics) = font.metrics();
-    let band = metrics.descent - metrics.ascent;
+    let (ascent, descent) = upright_centre_metrics(font);
+    let band = descent - ascent;
     if band <= 0.0 {
         return 0.0;
     }
-    let em_over = -metrics.ascent * font.size() / band;
+    let em_over = -ascent * font.size() / band;
     em_over - font.size() / 2.0
 }
 
@@ -508,6 +510,22 @@ mod tests {
                 rotated_shift(text)
             );
         }
+    }
+
+    #[test]
+    fn rotated_runs_centre_on_the_upright_em_box() {
+        // Noto Sans JP's ascent overshoots the em; sideways runs must centre
+        // on the same em box as upright glyphs, or full-width marks such as
+        // `…` sit off the column axis.
+        let typeface = FontMgr::new().new_from_data(VMTX_TEST_FONT, None).unwrap();
+        let font = Font::new(typeface, EM);
+        let (ascent, descent) = upright_centre_metrics(&font);
+        let em_box_middle = -(ascent + descent) / 2.0;
+        let shift = central_baseline_shift(&font);
+        assert!(
+            (shift - em_box_middle).abs() < 0.01,
+            "sideways baseline shift {shift}, upright em box middle {em_box_middle}"
+        );
     }
 
     #[test]
