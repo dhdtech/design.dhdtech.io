@@ -68,7 +68,7 @@ impl<'a> VectorRenderer<'a> {
 
         let bounds = text_content.bounds();
         let vertical_align = shape.vertical_align();
-        let layout = text_vertical::layout_for_box(text_content, bounds.height());
+        let layout = text_content.vertical_layout(&bounds);
 
         for shadow in &shape.drop_shadow_paints() {
             text_vertical::paint_drop_shadow(self.canvas, &layout, &bounds, vertical_align, shadow);

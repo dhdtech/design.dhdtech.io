@@ -7,7 +7,6 @@
 (ns app.main.ui.workspace.sidebar.options.menus.text-japanese-layout
   (:require-macros [app.main.style :as stl])
   (:require
-   [app.common.types.file :as ctf]
    [app.main.ui.components.title-bar :refer [title-bar*]]
    [app.main.ui.ds.buttons.icon-button :refer [icon-button*]]
    [app.main.ui.ds.controls.input :refer [input*]]
@@ -51,11 +50,11 @@
 
 (defn japanese-layout-config-enabled?
   "True under the WASM renderer when Japanese layout is enabled for the file
-  or in the user's profile."
-  [file-data profile]
+  or in the user's profile. `config` is a `refs/japanese-layout-config`
+  value."
+  [{:keys [file? all-files?]}]
   (and ^boolean (wm/vertical-layout-active?)
-       (or (ctf/japanese-layout-enabled? file-data)
-           (true? (get-in profile [:props :japanese-layout-all-files])))))
+       (boolean (or file? all-files?))))
 
 (defn vertical-japanese-layout?
   "True when the Japanese layout controls are editing vertical text."

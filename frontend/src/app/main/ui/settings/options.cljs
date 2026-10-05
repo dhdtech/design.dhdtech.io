@@ -143,9 +143,7 @@
   []
   (let [profile (mf/deref refs/profile)
         renderer (or (-> profile :props :renderer) :svg)
-        japanese-layout-enabled (true? (-> profile
-                                           :props
-                                           :japanese-layout-all-files))]
+        japanese-layout-enabled (:all-files? (mf/deref refs/japanese-layout-config))]
     (mf/use-effect
      #(dom/set-html-title (tr "title.settings.options")))
 

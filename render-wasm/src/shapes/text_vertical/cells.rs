@@ -4,7 +4,7 @@
 
 use std::ops::Range;
 
-use skia_safe::{textlayout::TypefaceFontProvider, FontMgr};
+use skia_safe::{textlayout::TypefaceFontProvider, FontMgr, Typeface};
 
 use crate::shapes::japanese::{classify, JapaneseClass};
 use crate::shapes::kinsoku::{forbidden_at_line_end, forbidden_at_line_start};
@@ -17,7 +17,7 @@ use super::layout::{CellKind, VerticalCell};
 use super::orientation::{
     is_upright_char, segment_by_orientation, uses_rotated_vertical_fallback, Segment,
 };
-use super::shaping::{shape_segment_with_fallbacks, span_font_families, ShapedRun};
+use super::shaping::{resolve_typefaces, shape_with_typefaces, span_font_families, ShapedRun};
 
 /// Smallest scale for `all` tate-chu-yoko; digit modes use 1 / run length.
 const MIN_TCY_SCALE: f32 = 0.5;
@@ -100,11 +100,38 @@ fn split_sideways_words(segment: Segment) -> Vec<Segment> {
 }
 
 fn segment_utf16(segment: &Segment, utf8: usize) -> usize {
-    segment.utf16_start
-        + segment.text[..utf8.min(segment.text.len())]
+    Utf16Cursor::new(segment).at(utf8)
+}
+
+/// Paragraph UTF-16 offsets of a segment's UTF-8 offsets, counted from the
+/// last lookup so ascending lookups walk the text once.
+struct Utf16Cursor<'a> {
+    segment: &'a Segment,
+    utf8: usize,
+    utf16: usize,
+}
+
+impl<'a> Utf16Cursor<'a> {
+    fn new(segment: &'a Segment) -> Self {
+        Self {
+            segment,
+            utf8: 0,
+            utf16: segment.utf16_start,
+        }
+    }
+
+    fn at(&mut self, utf8: usize) -> usize {
+        let utf8 = utf8.min(self.segment.text.len());
+        if utf8 < self.utf8 {
+            *self = Self::new(self.segment);
+        }
+        self.utf16 += self.segment.text[self.utf8..utf8]
             .chars()
             .map(char::len_utf16)
-            .sum::<usize>()
+            .sum::<usize>();
+        self.utf8 = utf8;
+        self.utf16
+    }
 }
 
 /// Cell builder for one span of a paragraph.
@@ -116,8 +143,9 @@ pub(super) struct SpanCells<'a> {
     paint: usize,
     /// UTF-16 offset of the span in its paragraph's layout text.
     start: usize,
-    /// The span's own font, then emoji and the registered fallback fonts.
-    families: Vec<String>,
+    /// Typefaces of the span's own font, then emoji and the registered
+    /// fallback fonts.
+    typefaces: Vec<Typeface>,
 }
 
 impl<'a> SpanCells<'a> {
@@ -136,16 +164,18 @@ impl<'a> SpanCells<'a> {
             span_index,
             paint,
             start,
-            families: span_font_families(span, fonts.fallback_families),
+            typefaces: resolve_typefaces(
+                &span_font_families(span, fonts.fallback_families),
+                fonts.provider,
+            ),
         }
     }
 
     fn shape(&self, text: &str, font_size: f32, upright: bool) -> Vec<ShapedRun> {
-        shape_segment_with_fallbacks(
+        shape_with_typefaces(
             text,
             font_size,
-            &self.families,
-            self.fonts.provider,
+            &self.typefaces,
             upright,
             self.span.font_features,
             self.fonts.fallback_mgr,
@@ -295,6 +325,7 @@ impl<'a> SpanCells<'a> {
             .then(|| vpal_table(&run.font))
             .flatten();
 
+        let mut utf16 = Utf16Cursor::new(segment);
         for (glyph, count) in run.cluster_spans() {
             let glyphs = &run.glyphs[glyph..glyph + count];
             let cluster_utf8 = run.clusters[glyph] as usize;
@@ -373,8 +404,8 @@ impl<'a> SpanCells<'a> {
                     count,
                 }
             };
-            let start = piece_base + segment_utf16(segment, cluster_utf8);
-            let end = piece_base + segment_utf16(segment, next_cluster_utf8);
+            let start = piece_base + utf16.at(cluster_utf8);
+            let end = piece_base + utf16.at(next_cluster_utf8);
             let cell = VerticalCell {
                 minimum_oikomi_extent: minimum_oikomi_extent(ch, extent, font_size, letter_spacing),
                 h_advance,

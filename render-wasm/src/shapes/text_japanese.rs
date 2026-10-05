@@ -389,6 +389,15 @@ pub(crate) struct HorizontalOffsets {
 impl HorizontalOffsets {
     pub(crate) fn new(paragraph: &Paragraph) -> Self {
         let (span_texts, offset_map) = paragraph.layout_span_texts();
+        Self::from_layout_texts(paragraph, &span_texts, offset_map)
+    }
+
+    /// Offsets for layout `span_texts` already built by `layout_span_texts`.
+    fn from_layout_texts(
+        paragraph: &Paragraph,
+        span_texts: &[String],
+        offset_map: kinsoku::OffsetMap,
+    ) -> Self {
         let ranges = span_ranges(paragraph, span_texts, &offset_map);
         Self {
             offset_map,
@@ -486,10 +495,37 @@ impl HorizontalOffsets {
     }
 }
 
+/// The horizontal passes of one paragraph that layout, painting, position
+/// data and the editor share: kinsoku layout texts, offsets, punctuation aki
+/// sheds and long-ruby spacing. `TextContent::horizontal_plans` caches them.
+pub(crate) struct HorizontalParagraphPlan {
+    pub(crate) texts: Vec<String>,
+    pub(crate) offsets: HorizontalOffsets,
+    pub(crate) sheds: Vec<Vec<(usize, f32)>>,
+    pub(crate) ruby_spacing: HorizontalRubySpacing,
+}
+
+impl HorizontalParagraphPlan {
+    pub(crate) fn new(paragraph: &Paragraph) -> Self {
+        let (texts, offset_map) = paragraph.layout_span_texts();
+        let sheds = horizontal_aki_sheds(paragraph, &texts);
+        let ruby_spacing = horizontal_ruby_spacing(paragraph, &texts);
+        let offsets = HorizontalOffsets::from_layout_texts(paragraph, &texts, offset_map);
+        Self {
+            texts,
+            offsets,
+            sheds,
+            ruby_spacing,
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn horizontal_span_ranges(paragraph: &Paragraph) -> Vec<HorizontalSpanRange> {
     HorizontalOffsets::new(paragraph).ranges
 }
 
+#[cfg(test)]
 pub(crate) fn horizontal_builder_to_source(paragraph: &Paragraph, builder_offset: usize) -> usize {
     HorizontalOffsets::new(paragraph).builder_to_source(builder_offset)
 }
@@ -499,7 +535,7 @@ pub(crate) fn horizontal_builder_to_source(paragraph: &Paragraph, builder_offset
 /// text, where each warichu span collapses to one placeholder.
 fn span_ranges(
     paragraph: &Paragraph,
-    span_texts: Vec<String>,
+    span_texts: &[String],
     offset_map: &kinsoku::OffsetMap,
 ) -> Vec<HorizontalSpanRange> {
     let mut builder_cursor = 0usize;
@@ -766,11 +802,12 @@ fn mini_paragraph(
 pub(crate) fn paint_horizontal_warichu(
     canvas: &skia::Canvas,
     paragraph: &Paragraph,
+    plan: &HorizontalParagraphPlan,
     laid_out: &skia::textlayout::Paragraph,
     x: f32,
     y: f32,
 ) {
-    let ranges = horizontal_span_ranges(paragraph);
+    let ranges = &plan.offsets.ranges;
     let placeholders = horizontal_warichu_placeholders(paragraph, laid_out);
     let warichu_ranges: Vec<_> = ranges.iter().filter(|range| range.warichu).collect();
     if placeholders.len() != warichu_ranges.len() {
@@ -914,12 +951,13 @@ pub(crate) fn horizontal_emphasis_mark_box(
 pub(crate) fn paint_horizontal_emphasis(
     canvas: &skia::Canvas,
     paragraph: &Paragraph,
+    plan: &HorizontalParagraphPlan,
     laid_out: &skia::textlayout::Paragraph,
     x: f32,
     y: f32,
 ) {
-    let offsets = HorizontalOffsets::new(paragraph);
-    let placements = horizontal_emphasis_placements(paragraph, &offsets, laid_out);
+    let offsets = &plan.offsets;
+    let placements = horizontal_emphasis_placements(paragraph, offsets, laid_out);
     for range in offsets.ranges.iter().filter(|range| !range.warichu) {
         let Some(span) = paragraph.children().get(range.span) else {
             continue;
@@ -1064,12 +1102,15 @@ pub(crate) fn paint_horizontal_ruby(
     let fallback_mgr = FontMgr::from(font_provider.clone());
     let fallback_families: Vec<String> = get_fallback_fonts().iter().cloned().collect();
     let bounds = text_content.bounds();
-    let (layout_texts, _) = paragraph.layout_span_texts();
-    let spacing = horizontal_ruby_spacing(paragraph, &layout_texts);
-    let offsets = HorizontalOffsets::new(paragraph);
+    let plans = text_content.horizontal_plans();
+    let Some(plan) = plans.get(paragraph_index) else {
+        return;
+    };
+    let spacing = &plan.ruby_spacing;
+    let offsets = &plan.offsets;
     let lines = laid_out.get_line_metrics();
 
-    for (span_index, span_range) in horizontal_ruby_targets(paragraph, &offsets) {
+    for (span_index, span_range) in horizontal_ruby_targets(paragraph, offsets) {
         let span = &paragraph.children()[span_index];
         let ruby_text = span.ruby_text();
         let ruby_font_size = span.ruby_font_size();
@@ -1618,6 +1659,70 @@ mod tests {
         assert_eq!(span.annotation_room_em(), 0.25);
         span.text_emphasis = TextEmphasis::FilledDot;
         assert_eq!(span.annotation_room_em(), 0.75);
+    }
+
+    #[test]
+    fn horizontal_plans_are_cached_until_the_content_changes() {
+        init_state();
+        let mut content = super::super::text::TextContent::new(
+            crate::math::Rect::from_xywh(0.0, 0.0, 200.0, 40.0),
+            crate::shapes::GrowType::Fixed,
+        );
+        content.add_paragraph(make_paragraph(vec![make_span("雪国。", 0.0)], 0.0));
+        let first = content.horizontal_plans();
+
+        assert!(std::rc::Rc::ptr_eq(&first, &content.horizontal_plans()));
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &content.clone().horizontal_plans()),
+            "clones share the cached plans"
+        );
+        assert_eq!(first[0].texts, vec!["雪国\u{2060}。".to_string()]);
+
+        content.paragraphs_mut()[0].children_mut()[0].text = "です".to_string();
+        let edited = content.horizontal_plans();
+        assert!(!std::rc::Rc::ptr_eq(&first, &edited));
+        assert_eq!(edited[0].texts, vec!["です".to_string()]);
+    }
+
+    #[test]
+    fn horizontal_annotations_can_paint_from_the_layout_cache() {
+        let content_with = |span: TextSpan| {
+            let mut content = super::super::text::TextContent::new(
+                crate::math::Rect::from_xywh(0.0, 0.0, 200.0, 40.0),
+                crate::shapes::GrowType::Fixed,
+            );
+            content.add_paragraph(make_paragraph(vec![span], 0.0));
+            content
+        };
+        let mut ruby = make_span("漢字", 0.0);
+        ruby.ruby = "かんじ".to_string();
+        let mut emphasis = make_span("強調", 0.0);
+        emphasis.text_emphasis = TextEmphasis::FilledDot;
+        let mut warichu = make_span("割注入り", 0.0);
+        warichu.warichu = true;
+        for span in [ruby, emphasis, warichu] {
+            assert!(content_with(span).can_paint_from_layout_cache());
+        }
+
+        let mut vertical = content_with(make_span("縦", 0.0));
+        vertical.paragraphs_mut()[0].set_writing_mode(WritingMode::VerticalRl);
+        assert!(!vertical.can_paint_from_layout_cache());
+    }
+
+    #[test]
+    fn emoji_detection_ignores_japanese_text() {
+        let content_with = |text: &str| {
+            let mut content = super::super::text::TextContent::new(
+                crate::math::Rect::from_xywh(0.0, 0.0, 200.0, 40.0),
+                crate::shapes::GrowType::Fixed,
+            );
+            content.add_paragraph(make_paragraph(vec![make_span(text, 0.0)], 0.0));
+            content
+        };
+        assert!(!content_with("日本語のテキスト、「括弧」").has_emoji());
+        assert!(content_with("あ😀").has_emoji());
+        assert!(content_with("#\u{FE0F}\u{20E3}").has_emoji());
+        assert!(content_with("©\u{FE0F}").has_emoji());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use crate::shapes::TextOrientation;
 
 /// Emoji ranges recognized by the frontend font-loader. Emoji stay upright
 /// in vertical flow; Latin text rotates under `text-orientation: mixed`.
-pub(super) fn is_emoji_char(c: char) -> bool {
+pub(crate) fn is_emoji_char(c: char) -> bool {
     matches!(u32::from(c),
         0x2300..=0x23FF
         | 0x2600..=0x27BF

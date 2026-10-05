@@ -45,6 +45,7 @@ pub(super) enum FlowScript {
 
 /// A cell of one paragraph awaiting column placement, with the facts the
 /// spacing passes and the column planner need.
+#[derive(Clone)]
 pub(super) struct FlowCell {
     pub cell: VerticalCell,
     /// Character of a single-character cell; classifies it for aki and kinsoku.

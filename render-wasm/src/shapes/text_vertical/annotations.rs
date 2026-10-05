@@ -3,6 +3,8 @@
 // ignore them; they are placed from the base cells' final columns and flow
 // extents.
 
+use std::collections::HashMap;
+
 use skia_safe::{self as skia, Font};
 
 use crate::shapes::japanese::{classify, JapaneseClass};
@@ -228,37 +230,92 @@ pub(super) fn ruby_base_units(
 /// Overhang room of every unit over its flow neighbours, before placement.
 /// Placement later removes the room at a column edge.
 pub(super) fn set_ruby_overhang_rooms(flow: &[FlowCell], ruby_units: &mut [RubyBaseUnit]) {
-    let has_ruby = |index: usize, units: &[RubyBaseUnit]| {
-        units.iter().any(|unit| unit.annotates(&flow[index].cell))
+    let unit_of_span = units_by_span(ruby_units);
+    let annotated = |index: usize| {
+        let cell = &flow[index].cell;
+        unit_of_span
+            .get(&cell.span)
+            .is_some_and(|unit| ruby_units[*unit].annotates(cell))
     };
-    let snapshot = ruby_units.to_vec();
-    for unit in ruby_units.iter_mut() {
-        let indices: Vec<usize> = (0..flow.len())
-            .filter(|index| unit.annotates(&flow[*index].cell))
-            .collect();
-        let (Some(first), Some(last)) = (indices.first(), indices.last()) else {
-            continue;
-        };
-        let room = |index: Option<usize>| {
-            index.map_or(0.0, |index| {
-                ruby_overhang_room(
-                    unit.overhang,
-                    flow[index].ch,
-                    has_ruby(index, &snapshot),
-                    flow[index].cell.extent,
-                    unit.ruby_font_size,
-                )
-            })
-        };
-        let before = first.checked_sub(1);
-        let after = Some(last + 1).filter(|index| *index < flow.len());
-        unit.room = (room(before), room(after));
+    let indices = annotated_indices(flow.iter().map(|item| &item.cell), ruby_units);
+    let rooms: Vec<(f32, f32)> = ruby_units
+        .iter()
+        .zip(&indices)
+        .map(|(unit, indices)| {
+            let (Some(first), Some(last)) = (indices.first(), indices.last()) else {
+                return unit.room;
+            };
+            let room = |index: Option<usize>| {
+                index.map_or(0.0, |index| {
+                    ruby_overhang_room(
+                        unit.overhang,
+                        flow[index].ch,
+                        annotated(index),
+                        flow[index].cell.extent,
+                        unit.ruby_font_size,
+                    )
+                })
+            };
+            let before = first.checked_sub(1);
+            let after = Some(last + 1).filter(|index| *index < flow.len());
+            (room(before), room(after))
+        })
+        .collect();
+    for (unit, room) in ruby_units.iter_mut().zip(rooms) {
+        unit.room = room;
     }
+}
+
+/// Index of the unit of each ruby span.
+fn units_by_span(ruby_units: &[RubyBaseUnit]) -> HashMap<usize, usize> {
+    ruby_units
+        .iter()
+        .enumerate()
+        .map(|(index, unit)| (unit.span, index))
+        .collect()
+}
+
+/// Indices of the cells each unit annotates, in cell order.
+fn annotated_indices<'a>(
+    cells: impl Iterator<Item = &'a VerticalCell>,
+    ruby_units: &[RubyBaseUnit],
+) -> Vec<Vec<usize>> {
+    let unit_of_span = units_by_span(ruby_units);
+    let mut indices = vec![Vec::new(); ruby_units.len()];
+    for (index, cell) in cells.enumerate() {
+        if let Some(unit) = unit_of_span.get(&cell.span) {
+            if ruby_units[*unit].annotates(cell) {
+                indices[*unit].push(index);
+            }
+        }
+    }
+    indices
+}
+
+/// Indices of the cells of each (paragraph, span), in cell order.
+fn cells_by_span(cells: &[VerticalCell]) -> HashMap<(usize, usize), Vec<usize>> {
+    let mut by_span: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+    for (index, cell) in cells.iter().enumerate() {
+        by_span
+            .entry((cell.paragraph, cell.span))
+            .or_default()
+            .push(index);
+    }
+    by_span
+}
+
+/// Indices of the cells of each column, in cell order.
+fn cells_by_column(cells: &[VerticalCell]) -> HashMap<usize, Vec<usize>> {
+    let mut by_column: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (index, cell) in cells.iter().enumerate() {
+        by_column.entry(cell.column).or_default().push(index);
+    }
+    by_column
 }
 
 /// Overhang room (before, after) of each ruby span, keyed by (paragraph,
 /// span).
-pub(super) type RubyRooms = Vec<((usize, usize), (f32, f32))>;
+pub(super) type RubyRooms = HashMap<(usize, usize), (f32, f32)>;
 
 /// Overhang room of every ruby span of a paragraph, for `layout_ruby`.
 pub(super) fn ruby_rooms(paragraph: usize, ruby_units: &[RubyBaseUnit]) -> RubyRooms {
@@ -274,10 +331,8 @@ pub(super) fn ruby_rooms(paragraph: usize, ruby_units: &[RubyBaseUnit]) -> RubyR
 /// gaps between characters, so the last cell keeps its extent; a
 /// single-character base grows around its centred glyph.
 pub(super) fn grow_ruby_bases(flow: &mut [FlowCell], ruby_units: &[RubyBaseUnit]) {
-    for unit in ruby_units {
-        let indices: Vec<usize> = (0..flow.len())
-            .filter(|index| unit.annotates(&flow[*index].cell))
-            .collect();
+    let all_indices = annotated_indices(flow.iter().map(|item| &item.cell), ruby_units);
+    for (unit, indices) in ruby_units.iter().zip(&all_indices) {
         let Some((last, growing)) = indices.split_last() else {
             continue;
         };
@@ -313,21 +368,20 @@ pub(super) fn spread_ruby_base_cells(
     } else {
         f32::MAX
     };
-    for unit in ruby_units {
-        let mut columns: Vec<usize> = cells
-            .iter()
-            .filter(|cell| unit.annotates(cell))
-            .map(|cell| cell.column)
+    let column_cells = cells_by_column(cells);
+    let all_indices = annotated_indices(cells.iter(), ruby_units);
+    for (unit, indices) in ruby_units.iter().zip(all_indices) {
+        let total_base_count = indices.len();
+        let mut by_column: Vec<(usize, usize)> = indices
+            .into_iter()
+            .map(|index| (cells[index].column, index))
             .collect();
-        let total_base_count = columns.len();
-        columns.sort_unstable();
-        columns.dedup();
+        by_column.sort_by_key(|(column, _)| *column);
 
         let mut base_start = 0usize;
-        for column in columns {
-            let mut group: Vec<usize> = (0..cells.len())
-                .filter(|index| cells[*index].column == column && unit.annotates(&cells[*index]))
-                .collect();
+        for group in by_column.chunk_by(|a, b| a.0 == b.0) {
+            let column = group[0].0;
+            let mut group: Vec<usize> = group.iter().map(|(_, index)| *index).collect();
             let group_start = base_start;
             base_start += group.len();
             if group.len() < 2 {
@@ -347,13 +401,11 @@ pub(super) fn spread_ruby_base_cells(
                 continue;
             }
 
-            let next_top = cells
+            let next_top = column_cells[&column]
                 .iter()
-                .enumerate()
-                .filter(|(index, cell)| {
-                    cell.column == column && !group.contains(index) && cell.top >= base_bottom
-                })
-                .map(|(_, cell)| cell.top)
+                .map(|index| &cells[*index])
+                .filter(|cell| !unit.annotates(cell) && cell.top >= base_bottom)
+                .map(|cell| cell.top)
                 .min_by(f32::total_cmp);
             let limit = next_top.unwrap_or(column_limit);
             let spread = (ruby_line - base_extent).min((limit - base_bottom).max(0.0));
@@ -379,12 +431,9 @@ struct RubyBaseColumn {
 }
 
 /// Base cells of one span grouped by column, in flow (column index) order.
-fn ruby_base_columns(cells: &[VerticalCell], paragraph: usize, span: usize) -> Vec<RubyBaseColumn> {
+fn ruby_base_columns(cells: &[VerticalCell], span_cells: &[usize]) -> Vec<RubyBaseColumn> {
     let mut columns: Vec<RubyBaseColumn> = Vec::new();
-    for cell in cells
-        .iter()
-        .filter(|cell| cell.paragraph == paragraph && cell.span == span)
-    {
+    for cell in span_cells.iter().map(|index| &cells[*index]) {
         let segment = (cell.top, cell.extent);
         match columns.iter_mut().find(|base| base.column == cell.column) {
             Some(base) => base.segments.push(segment),
@@ -440,22 +489,17 @@ fn ruby_glyphs(
 
 /// Overhang room of a base segment, without the sides that touch a column
 /// edge: ruby never sticks out past the first or last character.
+/// `column_cells` indexes the cells of the column.
 fn room_inside_column(
     cells: &[VerticalCell],
-    column: usize,
+    column_cells: &[usize],
     base_top: f32,
     base_bottom: f32,
     room: (f32, f32),
 ) -> (f32, f32) {
-    let in_column = |cell: &&VerticalCell| cell.column == column;
-    let has_before = cells
-        .iter()
-        .filter(in_column)
-        .any(|cell| cell.top + cell.extent <= base_top + 0.01);
-    let has_after = cells
-        .iter()
-        .filter(in_column)
-        .any(|cell| cell.top >= base_bottom - 0.01);
+    let in_column = || column_cells.iter().map(|index| &cells[*index]);
+    let has_before = in_column().any(|cell| cell.top + cell.extent <= base_top + 0.01);
+    let has_after = in_column().any(|cell| cell.top >= base_bottom - 0.01);
     (
         if has_before { room.0 } else { 0.0 },
         if has_after { room.1 } else { 0.0 },
@@ -475,13 +519,18 @@ pub(super) fn layout_ruby(
 ) -> (Vec<ShapedRun>, Vec<RubyCell>) {
     let mut ruby_runs: Vec<ShapedRun> = Vec::new();
     let mut ruby_cells: Vec<RubyCell> = Vec::new();
+    let span_cells = cells_by_span(cells);
+    let column_cells = cells_by_column(cells);
     for (paragraph_index, paragraph) in text_content.paragraphs().iter().enumerate() {
         for (span_index, span) in paragraph.children().iter().enumerate() {
             let ruby_text = span.ruby_text();
             if ruby_text.is_empty() {
                 continue;
             }
-            let base_columns = ruby_base_columns(cells, paragraph_index, span_index);
+            let Some(span_cells) = span_cells.get(&(paragraph_index, span_index)) else {
+                continue;
+            };
+            let base_columns = ruby_base_columns(cells, span_cells);
             if base_columns.is_empty() {
                 continue;
             }
@@ -526,10 +575,16 @@ pub(super) fn layout_ruby(
                 let top = base_segments[0].0;
                 let (last_top, last_extent) = base_segments[base_segments.len() - 1];
                 let room = rooms
-                    .iter()
-                    .find(|(key, _)| *key == (paragraph_index, span_index))
-                    .map_or((0.0, 0.0), |(_, room)| *room);
-                let room = room_inside_column(cells, column, top, last_top + last_extent, room);
+                    .get(&(paragraph_index, span_index))
+                    .copied()
+                    .unwrap_or((0.0, 0.0));
+                let room = room_inside_column(
+                    cells,
+                    &column_cells[&column],
+                    top,
+                    last_top + last_extent,
+                    room,
+                );
                 let glyph_tops = distribute_ruby_tops(
                     top,
                     (last_top + last_extent - top).max(0.0),
@@ -597,16 +652,39 @@ fn emphasis_flow_centers(cell: &VerticalCell, text: &str, runs: &[ShapedRun]) ->
     }
 }
 
-/// The characters of the UTF-16 range `start..end` of `text`.
-fn utf16_slice(text: &str, start: usize, end: usize) -> String {
-    let mut offset = 0;
-    text.chars()
-        .filter(|ch| {
-            let inside = offset >= start && offset < end;
-            offset += ch.len_utf16();
-            inside
-        })
-        .collect()
+/// (UTF-16, byte) offset of every character boundary of a text, end
+/// included, for slicing it by UTF-16 ranges.
+struct Utf16Boundaries<'a> {
+    text: &'a str,
+    boundaries: Vec<(usize, usize)>,
+}
+
+impl<'a> Utf16Boundaries<'a> {
+    fn new(text: &'a str) -> Self {
+        let mut utf16 = 0;
+        let mut boundaries: Vec<(usize, usize)> = text
+            .char_indices()
+            .map(|(byte, ch)| {
+                let boundary = (utf16, byte);
+                utf16 += ch.len_utf16();
+                boundary
+            })
+            .collect();
+        boundaries.push((utf16, text.len()));
+        Self { text, boundaries }
+    }
+
+    /// The characters that start inside the UTF-16 range `start..end`.
+    fn slice(&self, start: usize, end: usize) -> &'a str {
+        let byte = |offset: usize| {
+            let index = self
+                .boundaries
+                .partition_point(|(utf16, _)| *utf16 < offset);
+            self.boundaries[index.min(self.boundaries.len() - 1)].1
+        };
+        let start = byte(start);
+        &self.text[start..byte(end).max(start)]
+    }
 }
 
 /// Emphasis marks (圏点 / bouten) of each span with `text_emphasis`, shaped
@@ -623,9 +701,13 @@ pub(super) fn layout_emphasis(
 ) -> (Vec<ShapedRun>, Vec<EmphasisMark>) {
     let mut emphasis_runs: Vec<ShapedRun> = Vec::new();
     let mut emphasis_marks: Vec<EmphasisMark> = Vec::new();
+    let span_cells = cells_by_span(cells);
     for (paragraph_index, paragraph) in text_content.paragraphs().iter().enumerate() {
         for (span_index, span) in paragraph.children().iter().enumerate() {
             let Some(mark) = span.text_emphasis.mark_char() else {
+                continue;
+            };
+            let Some(span_cells) = span_cells.get(&(paragraph_index, span_index)) else {
                 continue;
             };
             let mark_font_size = span.font_size * EMPHASIS_FONT_SCALE;
@@ -657,13 +739,12 @@ pub(super) fn layout_emphasis(
             emphasis_runs.push(shaped.remove(0));
             let span_start = span_utf16_starts[paragraph_index][span_index];
             // Cell offsets index the span's transformed text.
-            let span_text = &span_transforms[paragraph_index][span_index].text;
-            for (cell_index, cell) in cells.iter().enumerate() {
-                if cell.paragraph != paragraph_index || cell.span != span_index {
-                    continue;
-                }
-                let text = utf16_slice(span_text, cell.start - span_start, cell.end - span_start);
-                for flow_center in emphasis_flow_centers(cell, &text, runs) {
+            let span_text =
+                Utf16Boundaries::new(&span_transforms[paragraph_index][span_index].text);
+            for cell_index in span_cells.iter().copied() {
+                let cell = &cells[cell_index];
+                let text = span_text.slice(cell.start - span_start, cell.end - span_start);
+                for flow_center in emphasis_flow_centers(cell, text, runs) {
                     emphasis_marks.push(EmphasisMark {
                         run: run_index,
                         cell: cell_index,
@@ -722,6 +803,31 @@ mod tests {
             400.0,
             GrowType::Fixed,
         )
+    }
+
+    #[test]
+    fn utf16_slices_keep_the_characters_starting_in_range() {
+        let linear = |text: &str, start: usize, end: usize| {
+            let mut offset = 0;
+            text.chars()
+                .filter(|ch| {
+                    let inside = offset >= start && offset < end;
+                    offset += ch.len_utf16();
+                    inside
+                })
+                .collect::<String>()
+        };
+        let text = "a𠮷漢🇯🇵b";
+        let boundaries = Utf16Boundaries::new(text);
+        for start in 0..10 {
+            for end in 0..10 {
+                assert_eq!(
+                    boundaries.slice(start, end),
+                    linear(text, start, end),
+                    "{start}..{end}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ use skia_safe::{
 };
 
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -249,6 +249,38 @@ struct CachedExtrect {
     bottom: f32,
 }
 
+/// Vertical layout with the content version and box it was laid out for.
+#[derive(Clone)]
+struct VerticalLayoutCache {
+    version: u64,
+    rect: Rect,
+    layout: Rc<super::text_vertical::VerticalLayout>,
+}
+
+impl std::fmt::Debug for VerticalLayoutCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerticalLayoutCache")
+            .field("version", &self.version)
+            .field("rect", &self.rect)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Horizontal paragraph plans with the content version they were built for.
+#[derive(Clone)]
+struct HorizontalPlansCache {
+    version: u64,
+    plans: Rc<Vec<HorizontalParagraphPlan>>,
+}
+
+impl std::fmt::Debug for HorizontalPlansCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HorizontalPlansCache")
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug)]
 pub struct TextContentLayout {
     pub paragraph_builders: Vec<ParagraphBuilderGroup>,
@@ -256,6 +288,10 @@ pub struct TextContentLayout {
     /// can paint without rebuilding Skia layout. Cleared builders on clone are OK.
     pub paragraphs: Rc<Vec<Vec<skia::textlayout::Paragraph>>>,
     cached_extrect: Cell<Option<CachedExtrect>>,
+    /// Last vertical layout, shared across clones like `paragraphs`.
+    vertical: RefCell<Option<VerticalLayoutCache>>,
+    /// Last horizontal paragraph plans, shared across clones.
+    horizontal: RefCell<Option<HorizontalPlansCache>>,
 }
 
 impl Default for TextContentLayout {
@@ -270,6 +306,8 @@ impl Clone for TextContentLayout {
             paragraph_builders: vec![],
             paragraphs: Rc::clone(&self.paragraphs),
             cached_extrect: Cell::new(self.cached_extrect.get()),
+            vertical: RefCell::new(self.vertical.borrow().clone()),
+            horizontal: RefCell::new(self.horizontal.borrow().clone()),
         }
     }
 }
@@ -286,6 +324,8 @@ impl TextContentLayout {
             paragraph_builders: vec![],
             paragraphs: Rc::new(Vec::new()),
             cached_extrect: Cell::new(None),
+            vertical: RefCell::new(None),
+            horizontal: RefCell::new(None),
         }
     }
 
@@ -538,11 +578,15 @@ impl TextContent {
         &self.paragraphs
     }
 
-    pub fn has_non_ascii(&self) -> bool {
+    /// True when some span holds an emoji: an emoji code point, or an emoji
+    /// presentation selector or keycap mark (`©️`, `#️⃣`). Color emoji need an
+    /// overlay above strokes.
+    pub fn has_emoji(&self) -> bool {
         self.paragraphs
             .iter()
             .flat_map(|p| p.children())
-            .any(|span| !span.text.is_ascii())
+            .flat_map(|span| span.text.chars())
+            .any(|c| super::text_vertical::is_emoji_char(c) || matches!(c, '\u{FE0F}' | '\u{20E3}'))
     }
 
     pub fn paragraphs_mut(&mut self) -> &mut Vec<Paragraph> {
@@ -558,6 +602,46 @@ impl TextContent {
         self.size.normalized_line_height
     }
 
+    /// Vertical layout for the box `rect`: its height is the column-wrap
+    /// budget and span paints resolve against it. Cached until the content or
+    /// the box changes; clones share it.
+    pub fn vertical_layout(&self, rect: &Rect) -> Rc<super::text_vertical::VerticalLayout> {
+        if let Some(entry) = self.layout.vertical.borrow().as_ref() {
+            if entry.version == self.content_version && entry.rect == *rect {
+                return Rc::clone(&entry.layout);
+            }
+        }
+        let layout = Rc::new(super::text_vertical::layout_for_rect(self, rect));
+        *self.layout.vertical.borrow_mut() = Some(VerticalLayoutCache {
+            version: self.content_version,
+            rect: *rect,
+            layout: Rc::clone(&layout),
+        });
+        layout
+    }
+
+    /// Horizontal passes of every paragraph (kinsoku texts, offsets, aki
+    /// sheds, ruby spacing), cached until the content changes; clones share
+    /// them. A font load bumps the content version, which ruby spacing needs.
+    pub(crate) fn horizontal_plans(&self) -> Rc<Vec<HorizontalParagraphPlan>> {
+        if let Some(entry) = self.layout.horizontal.borrow().as_ref() {
+            if entry.version == self.content_version {
+                return Rc::clone(&entry.plans);
+            }
+        }
+        let plans: Rc<Vec<HorizontalParagraphPlan>> = Rc::new(
+            self.paragraphs
+                .iter()
+                .map(HorizontalParagraphPlan::new)
+                .collect(),
+        );
+        *self.layout.horizontal.borrow_mut() = Some(HorizontalPlansCache {
+            version: self.content_version,
+            plans: Rc::clone(&plans),
+        });
+        plans
+    }
+
     /// Writing mode applies to the whole shape: the first paragraph sets it.
     pub fn is_vertical(&self) -> bool {
         self.paragraphs
@@ -565,17 +649,11 @@ impl TextContent {
             .is_some_and(|p| p.writing_mode() == WritingMode::VerticalRl)
     }
 
-    /// Vertical writing and horizontal ruby, warichu and emphasis marks need
-    /// the full text pass, not the cached paint layout.
+    /// Vertical writing paints from its own layout, not the cached
+    /// horizontal paragraphs. Horizontal ruby, warichu and emphasis marks
+    /// paint from the cached paragraphs like the base text.
     pub fn can_paint_from_layout_cache(&self) -> bool {
         !self.is_vertical()
-            && !self
-                .paragraphs
-                .iter()
-                .flat_map(|p| p.children())
-                .any(|span| {
-                    span.warichu || span.has_ruby() || span.text_emphasis.mark_char().is_some()
-                })
     }
 
     pub fn grow_type(&self) -> GrowType {
@@ -749,7 +827,7 @@ impl TextContent {
     /// overflows a fixed shape that is too narrow for its columns.
     fn vertical_extrect(&self, selrect: &Rect, valign: VerticalAlign) -> Rect {
         let mut rect = self.content_rect(selrect, valign);
-        let layout = super::text_vertical::layout_for_box(self, selrect.height());
+        let layout = self.vertical_layout(selrect);
         let left = selrect.left()
             + super::text_vertical::block_axis_offset(selrect.width(), layout.width, valign);
         rect.join(Rect::from_xywh(
@@ -816,7 +894,7 @@ impl TextContent {
         // Vertical writing: resolve through the vertical pass. The content
         // block is right-anchored.
         if self.is_vertical() {
-            let layout = super::text_vertical::layout_for_box(self, selrect.height());
+            let layout = self.vertical_layout(selrect);
             let cx = point.x
                 - super::text_vertical::block_axis_offset(
                     selrect.width(),
@@ -863,13 +941,12 @@ impl TextContent {
                 }
                 let position_with_affinity =
                     layout_paragraph.get_glyph_position_at_coordinate((para_pt.x, para_pt.y));
-                if let Some(paragraph) = self.paragraphs().get(paragraph_index) {
+                if let Some(plan) = self.horizontal_plans().get(paragraph_index) {
                     // Skia reports builder-text UTF-16 offsets (transformed and
                     // kinsoku-shifted); the model counts source characters.
-                    let offset = horizontal_builder_to_source(
-                        paragraph,
-                        position_with_affinity.position as usize,
-                    );
+                    let offset = plan
+                        .offsets
+                        .builder_to_source(position_with_affinity.position as usize);
 
                     return Some(TextPositionWithAffinity::new(
                         position_with_affinity,
@@ -995,24 +1072,21 @@ impl TextContent {
         let fonts = get_font_collection();
         let fallback_fonts = get_fallback_fonts();
         let mut paragraph_group = Vec::new();
+        let plans = self.horizontal_plans();
 
-        for paragraph in self.paragraphs() {
+        for (paragraph, plan) in self.paragraphs().iter().zip(plans.iter()) {
             let mut paragraph_style = paragraph.paragraph_to_style();
             if let Some(align) = align_override {
                 paragraph_style.set_text_align(align);
             }
             let mut builder = ParagraphBuilder::new(&paragraph_style, fonts);
             let mut has_text = false;
-            let (span_texts, _) = paragraph.layout_span_texts();
-            let sheds = super::text_japanese::horizontal_aki_sheds(paragraph, &span_texts);
-            let ruby_spacing =
-                super::text_japanese::horizontal_ruby_spacing(paragraph, &span_texts);
             for (((span, text), sheds), extra) in paragraph
                 .children()
                 .iter()
-                .zip(&span_texts)
-                .zip(&sheds)
-                .zip(&ruby_spacing.adjustments)
+                .zip(&plan.texts)
+                .zip(&plan.sheds)
+                .zip(&plan.ruby_spacing.adjustments)
             {
                 let text_style = if let Some((layer, image_id)) = opaque_image_layer {
                     let mut style = span.to_style(
@@ -1286,45 +1360,50 @@ impl TextContent {
 
         self.size.set_size(selrect.width(), selrect.height());
 
-        match self.grow_type() {
-            GrowType::AutoHeight => {
-                let result = self.text_layout_auto_height();
-                self.layout_width = Some(result.2.width);
-                self.set_layout_from_result(result, selrect.width(), selrect.height());
-            }
-            GrowType::AutoWidth => {
-                let result = self.text_layout_auto_width();
-                self.layout_width = Some(result.2.width);
-                self.set_layout_from_result(result, selrect.width(), selrect.height());
-            }
-            GrowType::Fixed => {
-                let result = self.text_layout_fixed();
-                self.layout_width = Some(result.2.width);
-                self.set_layout_from_result(result, selrect.width(), selrect.height());
-            }
-        }
-
-        // Vertical writing takes sizes from the vertical pass. Auto-width
-        // fits both axes without wrapping. Auto-height wraps at the shape
-        // height and grows width as columns advance right-to-left. Fixed
-        // keeps both dimensions.
         if self.is_vertical() {
+            // Vertical writing takes sizes from the vertical pass, so the
+            // horizontal skparagraph layout is skipped. Empty paragraph slots
+            // mark the layout as done. Auto-width fits both axes without
+            // wrapping. Auto-height wraps at the shape height and grows width
+            // as columns advance right-to-left. Fixed keeps both dimensions.
+            self.layout.set(
+                Vec::new(),
+                (0..self.paragraphs.len().max(1))
+                    .map(|_| Vec::new())
+                    .collect(),
+            );
+            self.layout_width = Some(selrect.width());
             match self.grow_type() {
                 GrowType::AutoWidth => {
-                    let (width, height) =
-                        super::text_vertical::measure_content(self, selrect.height());
-                    self.size.width = width.ceil().max(DEFAULT_TEXT_CONTENT_SIZE);
-                    self.size.height = height.ceil().max(DEFAULT_TEXT_CONTENT_SIZE);
+                    let layout = self.vertical_layout(&selrect);
+                    self.size.width = layout.width.ceil().max(DEFAULT_TEXT_CONTENT_SIZE);
+                    self.size.height = layout.height.ceil().max(DEFAULT_TEXT_CONTENT_SIZE);
                     self.size.max_width = self.size.width;
                 }
                 GrowType::AutoHeight => {
-                    let (width, _) = super::text_vertical::measure_content(self, selrect.height());
-                    self.size.width = width.ceil().max(DEFAULT_TEXT_CONTENT_SIZE);
+                    let layout = self.vertical_layout(&selrect);
+                    self.size.width = layout.width.ceil().max(DEFAULT_TEXT_CONTENT_SIZE);
                     self.size.height = selrect.height();
                     self.size.max_width = self.size.width;
                 }
+                GrowType::Fixed => {}
+            }
+        } else {
+            match self.grow_type() {
+                GrowType::AutoHeight => {
+                    let result = self.text_layout_auto_height();
+                    self.layout_width = Some(result.2.width);
+                    self.set_layout_from_result(result, selrect.width(), selrect.height());
+                }
+                GrowType::AutoWidth => {
+                    let result = self.text_layout_auto_width();
+                    self.layout_width = Some(result.2.width);
+                    self.set_layout_from_result(result, selrect.width(), selrect.height());
+                }
                 GrowType::Fixed => {
-                    self.size.set_size(selrect.width(), selrect.height());
+                    let result = self.text_layout_fixed();
+                    self.layout_width = Some(result.2.width);
+                    self.set_layout_from_result(result, selrect.width(), selrect.height());
                 }
             }
         }
@@ -1440,7 +1519,7 @@ impl TextContent {
         // Vertical writing: hit-test against the laid-out cells (absolute
         // coordinates, right-anchored to the selrect).
         if self.is_vertical() {
-            let layout = super::text_vertical::layout_for_box(self, shape.selrect.height());
+            let layout = self.vertical_layout(&shape.selrect);
             return super::text_vertical::intersects(
                 &layout,
                 &shape.selrect,
@@ -1693,10 +1772,16 @@ impl AppliedTextTransform {
         &self,
         transformed: std::ops::Range<usize>,
     ) -> std::ops::Range<usize> {
-        let mut ranges = self.source_ranges.iter().filter_map(|(output, source)| {
-            (output.start < transformed.end && output.end > transformed.start)
-                .then_some(source.clone())
-        });
+        // Output ranges are contiguous and ascending: skip to the first one
+        // that ends past `transformed.start`.
+        let first = self
+            .source_ranges
+            .partition_point(|(output, _)| output.end <= transformed.start);
+        let mut ranges = self.source_ranges[first..]
+            .iter()
+            .take_while(|(output, _)| output.start < transformed.end)
+            .filter(|(output, _)| output.end > transformed.start)
+            .map(|(_, source)| source.clone());
         let Some(first) = ranges.next() else {
             return 0..0;
         };
@@ -2147,6 +2232,7 @@ pub fn calculate_text_layout_data(
     let mut position_data: Vec<PositionData> = Vec::new();
     let mut previous_line_height = text_content.normalized_line_height();
     let text_paragraphs = text_content.paragraphs();
+    let plans = text_content.horizontal_plans();
 
     // 1. Build + layout each paragraph once, recording heights as we go.
     let mut paragraph_heights: Vec<f32> = Vec::new();
@@ -2186,8 +2272,9 @@ pub fn calculate_text_layout_data(
         for skia_paragraph in group_paragraphs.into_iter() {
             let decorations = text_paragraphs
                 .get(i)
-                .map(|text_paragraph| {
-                    decoration_segments(&skia_paragraph, text_paragraph, x, y_accum)
+                .zip(plans.get(i))
+                .map(|(text_paragraph, plan)| {
+                    decoration_segments(&skia_paragraph, text_paragraph, &plan.offsets, x, y_accum)
                 })
                 .unwrap_or_default();
             paragraph_layouts.push(ParagraphLayout {
@@ -2207,10 +2294,10 @@ pub fn calculate_text_layout_data(
             let paragraph_index = para_layout.source_paragraph;
             let current_y = para_layout.y;
             let text_paragraph = text_paragraphs.get(paragraph_index);
-            if let Some(text_para) = text_paragraph {
+            if let (Some(text_para), Some(plan)) = (text_paragraph, plans.get(paragraph_index)) {
                 // Ranges are in builder-text (kinsoku-shifted) space; the
                 // map translates exported positions back to span offsets.
-                let offsets = HorizontalOffsets::new(text_para);
+                let offsets = &plan.offsets;
                 let offset_map = &offsets.offset_map;
                 let entry =
                     |span: usize, range: std::ops::Range<usize>, mut rect: Rect, direction| {
@@ -2298,7 +2385,7 @@ pub fn calculate_text_layout_data(
                     }
                 }
                 for placement in
-                    horizontal_emphasis_placements(text_para, &offsets, &para_layout.paragraph)
+                    horizontal_emphasis_placements(text_para, offsets, &para_layout.paragraph)
                 {
                     if let Some(span) = text_para.children().get(placement.span) {
                         position_data.push(entry(
@@ -2324,21 +2411,22 @@ pub fn calculate_position_data(
     text_content: &TextContent,
     skip_position_data: bool,
 ) -> Vec<PositionData> {
-    let mut text_content = text_content.clone();
-    text_content.update_layout(shape.selrect);
-
-    // Vertical writing generates position data from the vertical cells.
+    // Vertical writing generates position data from the vertical cells and
+    // needs no horizontal layout.
     if text_content.is_vertical() {
         if skip_position_data {
             return Vec::new();
         }
-        let layout = super::text_vertical::layout_for_box(&text_content, shape.selrect.height());
+        let layout = text_content.vertical_layout(&shape.selrect);
         return super::text_vertical::position_data(
             &layout,
             &shape.selrect,
             shape.vertical_align(),
         );
     }
+
+    let mut text_content = text_content.clone();
+    text_content.update_layout(shape.selrect);
 
     let mut paragraph_builders = text_content.paragraph_builder_group_from_text(None);
     let layout_info = calculate_text_layout_data(

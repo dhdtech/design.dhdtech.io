@@ -24,7 +24,9 @@ pub const IDEOGRAPHIC_SPACE: char = '\u{3000}';
 /// Joins emoji into one grapheme cluster.
 const ZERO_WIDTH_JOINER: char = '\u{200D}';
 
-use super::japanese::{classify, extends_grapheme, keeps_together, pair_rule, JapaneseClass};
+use super::japanese::{
+    classify, extends_grapheme, keeps_together_classified, pair_rule, JapaneseClass,
+};
 
 pub fn forbidden_at_line_start(c: char) -> bool {
     classify(c).forbids_line_start()
@@ -51,21 +53,25 @@ impl OffsetMap {
     /// Original offset for a shifted offset. An offset on an inserted
     /// character resolves to the boundary where it was inserted.
     pub fn to_original(&self, shifted: usize) -> usize {
-        shifted - self.inserted.iter().take_while(|&&p| p < shifted).count()
+        shifted - self.inserted.partition_point(|&p| p < shifted)
     }
 
     /// Shifted offset for an original offset. A boundary that received an
     /// inserted character resolves after it, so carets skip synthetic spacing.
     pub fn to_shifted(&self, original: usize) -> usize {
-        let mut shifted = original;
-        for &p in &self.inserted {
-            if p <= shifted {
-                shifted += 1;
+        // The i-th insertion lands before `original` when it sits at or
+        // before `original + i`; `inserted[i] - i` never decreases, so the
+        // count is a partition point.
+        let (mut low, mut high) = (0, self.inserted.len());
+        while low < high {
+            let middle = (low + high) / 2;
+            if self.inserted[middle] - middle <= original {
+                low = middle + 1;
             } else {
-                break;
+                high = middle;
             }
         }
-        shifted
+        original + low
     }
 }
 
@@ -82,8 +88,8 @@ pub fn apply_to_span_texts_with_ruby_breaks(
 ) -> Option<(Vec<String>, OffsetMap)> {
     let mut inserted: Vec<usize> = Vec::new();
     let mut out: Vec<String> = Vec::with_capacity(span_texts.len());
-    // Base character of the previous grapheme cluster.
-    let mut prev: Option<char> = None;
+    // Base character of the previous grapheme cluster, with its class.
+    let mut prev: Option<(char, JapaneseClass)> = None;
     let mut after_zwj = false;
     let mut changed = false;
     // Running position in shifted UTF-16 coordinates.
@@ -100,6 +106,7 @@ pub fn apply_to_span_texts_with_ruby_breaks(
                 after_zwj = c == ZERO_WIDTH_JOINER;
                 continue;
             }
+            let current = (c, classify(c));
             let ruby_forbids_break = local_utf16 > 0
                 && ruby_breaks
                     .get(span_index)
@@ -107,8 +114,8 @@ pub fn apply_to_span_texts_with_ruby_breaks(
                     .is_some_and(|breaks| !breaks.contains(&local_utf16));
             let forbid_break = ruby_forbids_break
                 || prev.is_some_and(|p| {
-                    pair_rule(classify(p), classify(c)).suppress_break_with_joiner
-                        || keeps_together(p, c)
+                    pair_rule(p.1, current.1).suppress_break_with_joiner
+                        || keeps_together_classified(p, current)
                 });
             let mut insert = |ch: char| {
                 shifted_text.push(ch);
@@ -116,10 +123,10 @@ pub fn apply_to_span_texts_with_ruby_breaks(
                 shifted_pos += 1;
                 changed = true;
             };
-            if prev.is_some_and(|p| takes_em_space_after(p, c)) {
+            if prev.is_some_and(|p| takes_em_space_after(p, current)) {
                 insert(IDEOGRAPHIC_SPACE);
             }
-            if prev.is_some_and(|p| is_japanese_western_boundary(p, c)) {
+            if prev.is_some_and(|p| is_japanese_western_boundary(p, current)) {
                 insert(JAPANESE_WESTERN_SPACE);
             }
             // After an inserted space, the joiner keeps the break blocked.
@@ -135,7 +142,7 @@ pub fn apply_to_span_texts_with_ruby_breaks(
             shifted_text.push(layout_char);
             shifted_pos += c.len_utf16();
             local_utf16 += c.len_utf16();
-            prev = Some(c);
+            prev = Some(current);
         }
         out.push(shifted_text);
     }
@@ -148,9 +155,10 @@ pub fn apply_to_span_texts_with_ruby_breaks(
 
 /// JLREQ §3.2.6 boundary between Japanese text and a Western letter or
 /// digit. Western symbols, brackets and emoji set solid.
-fn is_japanese_western_boundary(before: char, after: char) -> bool {
-    let before_class = classify(before);
-    let after_class = classify(after);
+fn is_japanese_western_boundary(
+    (before, before_class): (char, JapaneseClass),
+    (after, after_class): (char, JapaneseClass),
+) -> bool {
     (before_class.is_japanese_text() && after_class.is_western_run() && after.is_alphanumeric())
         || (before_class.is_western_run()
             && before.is_alphanumeric()
@@ -159,10 +167,12 @@ fn is_japanese_western_boundary(before: char, after: char) -> bool {
 
 /// A question or exclamation mark that ends a sentence takes a one-em space
 /// (JLREQ §3.1.6), as in vertical layout.
-fn takes_em_space_after(before: char, after: char) -> bool {
-    let before_class = classify(before);
+fn takes_em_space_after(
+    (_, before_class): (char, JapaneseClass),
+    (_, after_class): (char, JapaneseClass),
+) -> bool {
     before_class == JapaneseClass::DividingPunctuation
-        && pair_rule(before_class, classify(after)).preferred_em >= 1.0
+        && pair_rule(before_class, after_class).preferred_em >= 1.0
 }
 
 #[cfg(test)]
@@ -396,6 +406,44 @@ mod tests {
         assert_eq!(texts, vec!["え\u{2060}？　はい".to_string()]);
         let (texts, _) = apply(&["え？」"]);
         assert_eq!(texts, vec!["え\u{2060}？\u{2060}」".to_string()]);
+    }
+
+    #[test]
+    fn offset_map_lookups_match_a_linear_scan() {
+        let linear_to_shifted = |inserted: &[usize], original: usize| {
+            let mut shifted = original;
+            for &p in inserted {
+                if p <= shifted {
+                    shifted += 1;
+                } else {
+                    break;
+                }
+            }
+            shifted
+        };
+        for inserted in [
+            vec![],
+            vec![0],
+            vec![2, 3, 4],
+            vec![1, 5, 6, 10],
+            vec![0, 1, 2],
+        ] {
+            let map = OffsetMap {
+                inserted: inserted.clone(),
+            };
+            for offset in 0..16 {
+                assert_eq!(
+                    map.to_shifted(offset),
+                    linear_to_shifted(&inserted, offset),
+                    "to_shifted({offset}) for {inserted:?}"
+                );
+                assert_eq!(
+                    map.to_original(offset),
+                    offset - inserted.iter().take_while(|&&p| p < offset).count(),
+                    "to_original({offset}) for {inserted:?}"
+                );
+            }
+        }
     }
 
     #[test]

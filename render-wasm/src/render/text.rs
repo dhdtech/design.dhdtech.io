@@ -3,10 +3,10 @@ use crate::{
     error::Result,
     math::Rect,
     shapes::{
-        add_horizontal_span, calculate_text_layout_data, horizontal_aki_sheds,
-        horizontal_ruby_spacing, set_paint_fill, text_vertical, vertical_align_offset,
-        HorizontalOffsets, Paragraph as TextParagraph, ParagraphBuilderGroup, ParagraphLayout,
-        Stroke, StrokeKind, TextContent, TextDecorationSegment,
+        add_horizontal_span, calculate_text_layout_data, set_paint_fill, text_vertical,
+        vertical_align_offset, HorizontalOffsets, Paragraph as TextParagraph,
+        ParagraphBuilderGroup, ParagraphLayout, Stroke, StrokeKind, TextContent,
+        TextDecorationSegment,
     },
     utils::{get_fallback_fonts, get_font_collection},
 };
@@ -30,10 +30,9 @@ pub fn render_vertical_text(
     skip_effects: bool,
 ) -> Result<()> {
     let blur_filter = (!skip_effects).then(|| shape.image_filter(1.0)).flatten();
-    let text_content = text_content.new_bounds(shape.selrect());
-    let bounds = text_content.bounds();
+    let bounds = shape.selrect();
     let vertical_align = shape.vertical_align();
-    let layout = text_vertical::layout_for_box(&text_content, bounds.height());
+    let layout = text_content.vertical_layout(&bounds);
 
     let skip_shadows = skip_effects || state.should_skip_drop_shadows();
     if !skip_shadows {
@@ -151,19 +150,17 @@ pub fn stroke_paragraph_builder_group_from_text(
     let remove_stroke_alpha = use_shadow.unwrap_or(false) && !stroke.is_transparent();
     let mut group_layer_opacity: Option<f32> = None;
 
-    for paragraph in text_content.paragraphs() {
+    let plans = text_content.horizontal_plans();
+    for (paragraph, plan) in text_content.paragraphs().iter().zip(plans.iter()) {
         let mut stroke_paragraphs_map: std::collections::HashMap<usize, ParagraphBuilder> =
             std::collections::HashMap::new();
 
-        let (span_texts, _) = paragraph.layout_span_texts();
-        let sheds = horizontal_aki_sheds(paragraph, &span_texts);
-        let ruby_spacing = horizontal_ruby_spacing(paragraph, &span_texts);
         for (((span, text), sheds), extra) in paragraph
             .children()
             .iter()
-            .zip(&span_texts)
-            .zip(&sheds)
-            .zip(&ruby_spacing.adjustments)
+            .zip(&plan.texts)
+            .zip(&plan.sheds)
+            .zip(&plan.ruby_spacing.adjustments)
         {
             let (stroke_paints, stroke_layer_opacity) =
                 get_text_stroke_paints(stroke, bounds, remove_stroke_alpha);
@@ -549,15 +546,44 @@ fn paint_from_cached_layout(canvas: &Canvas, shape: &Shape, text_content: &TextC
     let vertical_offset =
         vertical_align_offset(selrect.height(), total_text_height, shape.vertical_align());
 
+    let plans = text_content.horizontal_plans();
     let mut y_accum = base_y + vertical_offset;
     for (index, group) in paragraphs.iter().enumerate() {
         let Some(paragraph) = group.first() else {
             continue;
         };
         paragraph.paint(canvas, (x, y_accum));
-        if draw_decorations {
-            if let Some(text_paragraph) = text_content.paragraphs().get(index) {
-                for deco in decoration_segments(paragraph, text_paragraph, x, y_accum) {
+        if let (Some(text_paragraph), Some(plan)) =
+            (text_content.paragraphs().get(index), plans.get(index))
+        {
+            crate::shapes::paint_horizontal_warichu(
+                canvas,
+                text_paragraph,
+                plan,
+                paragraph,
+                x,
+                y_accum,
+            );
+            crate::shapes::paint_horizontal_emphasis(
+                canvas,
+                text_paragraph,
+                plan,
+                paragraph,
+                x,
+                y_accum,
+            );
+            crate::shapes::paint_horizontal_ruby(
+                canvas,
+                text_content,
+                index,
+                paragraph,
+                x,
+                y_accum,
+            );
+            if draw_decorations {
+                for deco in
+                    decoration_segments(paragraph, text_paragraph, &plan.offsets, x, y_accum)
+                {
                     draw_decoration_segment(canvas, &deco);
                 }
             }
@@ -693,26 +719,31 @@ fn paint_text_with_emoji_overlay(
 
     // Vertical writing paints through the vertical pass. Stored text bounds
     // describe the measured content and can be taller than a fixed shape, so
-    // rebind to the selrect to keep the shape height as the column-wrap budget.
-    let vertical_text_content = text_content
-        .is_vertical()
-        .then(|| text_content.new_bounds(shape.selrect()));
-    if vertical_text_content.as_ref().is_some_and(|content| {
-        crate::shapes::text_vertical::paint_text_vertical(canvas, content, shape.vertical_align())
-    }) {
+    // the selrect is the column-wrap budget.
+    if crate::shapes::text_vertical::paint_text_vertical(
+        canvas,
+        text_content,
+        &shape.selrect(),
+        shape.vertical_align(),
+    ) {
         return;
     }
 
     let mut layout_info =
         calculate_text_layout_data(shape, text_content, paragraph_builder_groups, true);
+    let plans = text_content.horizontal_plans();
 
     for para in &mut layout_info.paragraphs {
         para.paragraph.paint(canvas, (para.x, para.y));
 
-        if let Some(source_paragraph) = text_content.paragraphs().get(para.source_paragraph) {
+        if let (Some(source_paragraph), Some(plan)) = (
+            text_content.paragraphs().get(para.source_paragraph),
+            plans.get(para.source_paragraph),
+        ) {
             crate::shapes::paint_horizontal_warichu(
                 canvas,
                 source_paragraph,
+                plan,
                 &para.paragraph,
                 para.x,
                 para.y,
@@ -720,6 +751,7 @@ fn paint_text_with_emoji_overlay(
             crate::shapes::paint_horizontal_emphasis(
                 canvas,
                 source_paragraph,
+                plan,
                 &para.paragraph,
                 para.x,
                 para.y,
@@ -1289,8 +1321,10 @@ type LineDecoration<'a> = (usize, usize, TextDecoration, &'a StyleMetrics<'a>);
 /// UTF-16 ranges of the spans that ask for a decoration we draw.
 /// Builder-text range of every underlined or struck span. Warichu spans
 /// collapse to a placeholder and get no bar.
-fn decorated_span_ranges(text_paragraph: &TextParagraph) -> Vec<(usize, usize, TextDecoration)> {
-    let offsets = HorizontalOffsets::new(text_paragraph);
+fn decorated_span_ranges(
+    text_paragraph: &TextParagraph,
+    offsets: &HorizontalOffsets,
+) -> Vec<(usize, usize, TextDecoration)> {
     text_paragraph
         .children()
         .iter()
@@ -1328,10 +1362,11 @@ fn style_metric_at<'a>(
 pub fn decoration_segments(
     skia_paragraph: &skia::textlayout::Paragraph,
     text_paragraph: &TextParagraph,
+    offsets: &HorizontalOffsets,
     x: f32,
     y_accum: f32,
 ) -> Vec<TextDecorationSegment> {
-    let decorated = decorated_span_ranges(text_paragraph);
+    let decorated = decorated_span_ranges(text_paragraph, offsets);
     if decorated.is_empty() {
         return Vec::new();
     }
@@ -1490,7 +1525,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            decorated_span_ranges(&para),
+            decorated_span_ranges(&para, &HorizontalOffsets::new(&para)),
             vec![
                 (6, 11, TextDecoration::UNDERLINE),
                 (18, 24, TextDecoration::LINE_THROUGH),
@@ -1512,7 +1547,7 @@ mod tests {
 
         // The emoji takes two UTF-16 units and `ß` uppercases to `SS`.
         assert_eq!(
-            decorated_span_ranges(&para),
+            decorated_span_ranges(&para, &HorizontalOffsets::new(&para)),
             vec![
                 (2, 9, TextDecoration::UNDERLINE),
                 (9, 10, TextDecoration::UNDERLINE),
@@ -1529,7 +1564,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            decorated_span_ranges(&para),
+            decorated_span_ranges(&para, &HorizontalOffsets::new(&para)),
             vec![(3, 4, TextDecoration::UNDERLINE)]
         );
     }
@@ -1545,7 +1580,7 @@ mod tests {
 
         // The warichu span collapses to a three-unit placeholder.
         assert_eq!(
-            decorated_span_ranges(&para),
+            decorated_span_ranges(&para, &HorizontalOffsets::new(&para)),
             vec![(3, 4, TextDecoration::UNDERLINE)]
         );
     }
@@ -1557,6 +1592,6 @@ mod tests {
             span("none", Some(TextDecoration::NO_DECORATION), None),
         ]);
 
-        assert!(decorated_span_ranges(&para).is_empty());
+        assert!(decorated_span_ranges(&para, &HorizontalOffsets::new(&para)).is_empty());
     }
 }

@@ -10,7 +10,6 @@
    [app.common.data :as d]
    [app.common.data.macros :as dm]
    [app.common.files.helpers :as cfh]
-   [app.common.types.file :as ctf]
    [app.common.uuid :as uuid]
    [app.config :as cf]
    [app.main.data.common :as dcm]
@@ -234,12 +233,9 @@
 (mf/defc preferences-menu*
   {::mf/private true
    ::mf/wrap [mf/memo]}
-  [{:keys [japanese-layout-enabled layout profile toggle-flag on-close
-           toggle-theme toggle-render toggle-japanese-layout]}]
+  [{:keys [japanese-layout-enabled japanese-layout-all-files layout profile toggle-flag
+           on-close toggle-theme toggle-render toggle-japanese-layout]}]
   (let [renderer                    (or (-> profile :props :renderer) :svg)
-        japanese-layout-all-files? (true? (-> profile
-                                              :props
-                                              :japanese-layout-all-files))
         read-only?                  (mf/use-ctx ctx/workspace-read-only?)
 
         show-nudge-options
@@ -324,7 +320,7 @@
       [:span {:class (stl/css :item-name)} (tr "modals.nudge-title")]]
 
      (when (and (not read-only?)
-                (not japanese-layout-all-files?)
+                (not japanese-layout-all-files)
                 (wm/vertical-layout-active?))
        [:> dropdown-menu-item* {:on-click    toggle-japanese-layout
                                 :class       (stl/css :base-menu-item :submenu-item)
@@ -907,9 +903,8 @@
 (mf/defc menu*
   [{:keys [layout file]}]
   (let [profile            (mf/deref refs/profile)
-        file-data          (mf/deref refs/workspace-data)
-        japanese-layout-enabled
-        (ctf/japanese-layout-enabled? file-data)
+        japanese-layout    (mf/deref refs/japanese-layout-config)
+        japanese-layout-enabled (:file? japanese-layout)
 
         show-menu*         (mf/use-state false)
         show-menu?         (deref show-menu*)
@@ -1180,6 +1175,7 @@
        [:> preferences-menu* {:layout layout
                               :profile profile
                               :japanese-layout-enabled japanese-layout-enabled
+                              :japanese-layout-all-files (:all-files? japanese-layout)
                               :toggle-flag toggle-flag
                               :toggle-theme toggle-theme
                               :toggle-render toggle-render

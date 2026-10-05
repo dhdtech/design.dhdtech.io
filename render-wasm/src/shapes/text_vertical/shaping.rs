@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::ops::Range;
 
 use skia_safe::{
@@ -118,12 +119,11 @@ impl ShapedRun {
         let clusters = &self.clusters[glyph..glyph + count];
         let first = clusters.iter().copied().min().unwrap_or(base);
         let last = clusters.iter().copied().max().unwrap_or(base);
-        let end = self
-            .clusters
+        // Clusters ascend along the run: the next larger one ends the text.
+        let end = self.clusters[glyph + count..]
             .iter()
             .copied()
-            .filter(|cluster| *cluster > last)
-            .min()
+            .find(|cluster| *cluster > last)
             .map_or(self.text.len(), |cluster| {
                 cluster.saturating_sub(base) as usize
             });
@@ -330,8 +330,7 @@ pub(super) fn shape_segment(
     font_features: FontFeatures,
     fallback: FontMgr,
 ) -> Vec<ShapedRun> {
-    let shaper = skia::Shaper::new(fallback.clone());
-    let mut font_iter = skia::Shaper::new_font_mgr_run_iterator(text, font, Some(fallback));
+    let mut font_iter = skia::Shaper::new_font_mgr_run_iterator(text, font, Some(fallback.clone()));
     let mut bidi_iter = skia::shapers::primitive::trivial_bidi_run_iterator(0, text.len());
     let mut script_iter = skia::Shaper::new_hb_icu_script_run_iterator(text);
     let mut lang_iter = skia::Shaper::new_trivial_language_run_iterator("ja", text.len());
@@ -346,16 +345,18 @@ pub(super) fn shape_segment(
     }
 
     let mut collector = RunCollector::default();
-    shaper.shape_with_iterators_and_features(
-        text,
-        &mut font_iter,
-        &mut bidi_iter,
-        &mut script_iter,
-        &mut lang_iter,
-        &features,
-        f32::MAX,
-        &mut collector,
-    );
+    with_shaper(&fallback, |shaper| {
+        shaper.shape_with_iterators_and_features(
+            text,
+            &mut font_iter,
+            &mut bidi_iter,
+            &mut script_iter,
+            &mut lang_iter,
+            &features,
+            f32::MAX,
+            &mut collector,
+        )
+    });
     for run in &mut collector.runs {
         run.text = text
             .get(run.utf8_range.clone())
@@ -363,6 +364,20 @@ pub(super) fn shape_segment(
             .to_string();
     }
     collector.runs
+}
+
+thread_local! {
+    static SHAPER: RefCell<Option<skia::Shaper>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` with this thread's shaper, built on first use. One shaper serves
+/// every font manager: shaping with explicit iterators takes the fallback
+/// from the font run iterator, never from the shaper.
+fn with_shaper<R>(fallback: &FontMgr, f: impl FnOnce(&skia::Shaper) -> R) -> R {
+    SHAPER.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        f(cache.get_or_insert_with(|| skia::Shaper::new(fallback.clone())))
+    })
 }
 
 /// Combining marks, variation selectors and ZWJ belong to the preceding
@@ -415,16 +430,42 @@ pub(crate) fn shape_segment_with_fallbacks(
     font_features: FontFeatures,
     fallback_mgr: &FontMgr,
 ) -> Vec<ShapedRun> {
-    let typefaces: Vec<Typeface> = families
+    shape_with_typefaces(
+        text,
+        font_size,
+        &resolve_typefaces(families, font_provider),
+        upright,
+        font_features,
+        fallback_mgr,
+    )
+}
+
+/// The typefaces of `families` that `font_provider` holds, in order.
+pub(crate) fn resolve_typefaces(
+    families: &[String],
+    font_provider: &TypefaceFontProvider,
+) -> Vec<Typeface> {
+    families
         .iter()
         .filter_map(|family| font_provider.match_family_style(family, skia::FontStyle::default()))
-        .collect();
+        .collect()
+}
+
+/// `shape_segment_with_fallbacks` with the families already resolved.
+pub(crate) fn shape_with_typefaces(
+    text: &str,
+    font_size: f32,
+    typefaces: &[Typeface],
+    upright: bool,
+    font_features: FontFeatures,
+    fallback_mgr: &FontMgr,
+) -> Vec<ShapedRun> {
     if typefaces.is_empty() {
         return Vec::new();
     }
 
     let mut result = Vec::new();
-    for (range, typeface_index) in typeface_chunks(text, &typefaces) {
+    for (range, typeface_index) in typeface_chunks(text, typefaces) {
         let font = Font::new(typefaces[typeface_index].clone(), font_size);
         let mut shaped = shape_segment(
             &text[range.clone()],

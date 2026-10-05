@@ -42,7 +42,8 @@ mod shaping;
 mod test_support;
 
 pub(crate) use annotations::{distribute_ruby_tops, ruby_overhang_room};
-pub use layout::{block_axis_offset, layout_for_box, measure_content, VerticalLayout};
+pub use layout::{block_axis_offset, layout_for_rect, VerticalLayout};
+pub(crate) use orientation::is_emoji_char;
 pub use paint::{
     paint_drop_shadow, paint_grid, paint_layout, paint_stroke, paint_text_vertical,
     paint_text_vertical_with, vertical_text_paths,

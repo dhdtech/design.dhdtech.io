@@ -341,10 +341,8 @@
         more-options-open?   (:more-options menu-state)
         japanese-layout-open? (:japanese-layout menu-state)
 
-        profile              (mf/deref refs/profile)
-        file-data            (mf/deref refs/workspace-data)
         japanese-layout-config-enabled?
-        (tjl/japanese-layout-config-enabled? file-data profile)
+        (tjl/japanese-layout-config-enabled? (mf/deref refs/japanese-layout-config))
 
         font-id         (or (:font-id values) (:font-id txt/default-typography))
 

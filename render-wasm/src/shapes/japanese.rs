@@ -368,6 +368,15 @@ const MATH_SYMBOLS: &str = "＝=≠≒≃≅≈≡≢＜<＞>≦≧≤≥≪≫�
 const MATH_OPERATORS: &str = "＋+－−-÷×±∓∗∙√∫∬∭∑∏";
 
 pub fn classify(c: char) -> JapaneseClass {
+    // Common letters skip the table scans.
+    match c {
+        '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' => JapaneseClass::Ideographic,
+        'a'..='z' | 'A'..='Z' => JapaneseClass::Western,
+        _ => classify_by_tables(c),
+    }
+}
+
+fn classify_by_tables(c: char) -> JapaneseClass {
     if OPENING_BRACKETS.contains(c) {
         JapaneseClass::OpeningBracket
     } else if CLOSING_BRACKETS.contains(c) {
@@ -430,12 +439,19 @@ fn is_numeral(c: char) -> bool {
 /// number, full-width ones included (`２０２６`), which JLREQ would let break
 /// as ideographs. ASCII digit pairs are already grouped numerals.
 pub fn keeps_together(before: char, after: char) -> bool {
-    let before_class = classify(before);
+    keeps_together_classified((before, classify(before)), (after, classify(after)))
+}
+
+/// `keeps_together` for characters already paired with their classes.
+pub fn keeps_together_classified(
+    (before, before_class): (char, JapaneseClass),
+    (after, after_class): (char, JapaneseClass),
+) -> bool {
     (before == after && before_class == JapaneseClass::Inseparable)
         || (is_numeral(before)
             && is_numeral(after)
             && !(before.is_ascii_digit() && after.is_ascii_digit()))
-        || (is_numeral(before) && classify(after) == JapaneseClass::PostfixedAbbreviation)
+        || (is_numeral(before) && after_class == JapaneseClass::PostfixedAbbreviation)
         || (before_class == JapaneseClass::PrefixedAbbreviation && is_numeral(after))
 }
 
@@ -729,6 +745,17 @@ mod tests {
         ];
         for (character, expected) in cases {
             assert_eq!(classify(character), expected, "wrong class for {character}");
+        }
+    }
+
+    #[test]
+    fn fast_classes_match_the_tables() {
+        let fast = ('\u{4E00}'..='\u{9FFF}')
+            .chain('\u{3400}'..='\u{4DBF}')
+            .chain('a'..='z')
+            .chain('A'..='Z');
+        for c in fast {
+            assert_eq!(classify(c), classify_by_tables(c), "{c:?}");
         }
     }
 

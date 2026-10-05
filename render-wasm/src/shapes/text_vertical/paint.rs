@@ -9,12 +9,12 @@ use crate::shapes::{Stroke, StrokeKind, TextContent, VerticalAlign};
 
 use super::annotations::{emphasis_mark_center, ruby_strip_x, EmphasisMark, RubyCell};
 use super::font_tables::upright_baseline;
-use super::layout::{column_base_center, layout_for_box, CellKind, VerticalCell, VerticalLayout};
+use super::layout::{column_base_center, CellKind, VerticalCell, VerticalLayout};
 use super::shaping::{single_glyph_blob, ShapedRun};
 
 /// One text blob drawn at `offset` in the local space that `transform` maps
-/// to the document (identity when `None`). Canvas painting and outline export
-/// share these draws, so they match for every cell kind.
+/// to the layout's content space (identity when `None`). Canvas painting and
+/// outline export share these draws, so they match for every cell kind.
 struct GlyphDraw {
     blob: TextBlob,
     offset: SkPoint,
@@ -38,17 +38,19 @@ impl GlyphDraw {
         }
     }
 
-    fn draw(&self, canvas: &Canvas, paint: &Paint) {
+    /// Draws with the content origin at `origin`.
+    fn draw(&self, canvas: &Canvas, paint: &Paint, origin: SkPoint) {
         if crate::render::svg::writing_svg() {
-            canvas.draw_path(&self.path(), paint);
+            canvas.draw_path(&self.path(origin), paint);
             return;
         }
         match &self.transform {
             None => {
-                canvas.draw_text_blob(&self.blob, self.offset, paint);
+                canvas.draw_text_blob(&self.blob, self.offset + origin, paint);
             }
             Some(transform) => {
                 canvas.save();
+                canvas.translate(origin);
                 canvas.concat(transform);
                 canvas.draw_text_blob(&self.blob, self.offset, paint);
                 canvas.restore();
@@ -56,17 +58,52 @@ impl GlyphDraw {
         }
     }
 
-    fn into_path(self) -> skia::Path {
-        self.path()
-    }
-
-    fn path(&self) -> skia::Path {
-        let path = text_blob_path(self.blob.clone(), self.offset);
+    /// Outline with the content origin at `origin`.
+    fn path(&self, origin: SkPoint) -> skia::Path {
         match &self.transform {
-            None => path,
-            Some(transform) => path.make_transform(transform),
+            None => text_blob_path(self.blob.clone(), self.offset + origin),
+            Some(transform) => {
+                let mut transform = *transform;
+                transform.post_translate(origin);
+                text_blob_path(self.blob.clone(), self.offset).make_transform(&transform)
+            }
         }
     }
+}
+
+/// Glyph draws of a layout with its content origin at (0, 0), indexed like
+/// its cells, ruby cells and emphasis marks. Built on the first paint.
+pub(super) struct LayoutDraws {
+    cells: Vec<Vec<GlyphDraw>>,
+    ruby: Vec<Vec<GlyphDraw>>,
+    emphasis: Vec<Option<GlyphDraw>>,
+}
+
+impl LayoutDraws {
+    fn new(layout: &VerticalLayout) -> Self {
+        let origin = (0.0, 0.0);
+        Self {
+            cells: layout
+                .cells
+                .iter()
+                .map(|cell| cell_draws(layout, cell, origin))
+                .collect(),
+            ruby: layout
+                .ruby_cells
+                .iter()
+                .map(|ruby| ruby_draws(layout, ruby, origin))
+                .collect(),
+            emphasis: layout
+                .emphasis_marks
+                .iter()
+                .map(|mark| emphasis_draw(layout, mark, origin))
+                .collect(),
+        }
+    }
+}
+
+fn layout_draws(layout: &VerticalLayout) -> &LayoutDraws {
+    layout.draws.get_or_init(|| LayoutDraws::new(layout))
 }
 
 /// Glyphs on their side: +x of the blob runs down the column from `origin`.
@@ -272,10 +309,11 @@ pub fn paint_layout(
     vertical_align: VerticalAlign,
 ) {
     let origin = layout.origin(bounds, vertical_align);
-    for cell in &layout.cells {
+    let draws = layout_draws(layout);
+    for (cell, cell_draws) in layout.cells.iter().zip(&draws.cells) {
         let paint = &layout.paints[cell.paint];
-        for draw in cell_draws(layout, cell, origin) {
-            draw.draw(canvas, paint);
+        for draw in cell_draws {
+            draw.draw(canvas, paint, origin.into());
         }
         let mut decoration_paint = paint.clone();
         decoration_paint.set_style(skia::PaintStyle::Fill);
@@ -284,14 +322,18 @@ pub fn paint_layout(
             canvas.draw_rect(rect, &decoration_paint);
         }
     }
-    for ruby in &layout.ruby_cells {
-        for draw in ruby_draws(layout, ruby, origin) {
-            draw.draw(canvas, &layout.paints[ruby.paint]);
+    for (ruby, ruby_draws) in layout.ruby_cells.iter().zip(&draws.ruby) {
+        for draw in ruby_draws {
+            draw.draw(canvas, &layout.paints[ruby.paint], origin.into());
         }
     }
-    for mark in &layout.emphasis_marks {
-        if let Some(draw) = emphasis_draw(layout, mark, origin) {
-            draw.draw(canvas, &layout.paints[layout.cells[mark.cell].paint]);
+    for (mark, draw) in layout.emphasis_marks.iter().zip(&draws.emphasis) {
+        if let Some(draw) = draw {
+            draw.draw(
+                canvas,
+                &layout.paints[layout.cells[mark.cell].paint],
+                origin.into(),
+            );
         }
     }
 }
@@ -306,10 +348,8 @@ fn paint_glyphs(
     paint: &Paint,
 ) {
     let origin = layout.origin(bounds, vertical_align);
-    for cell in &layout.cells {
-        for draw in cell_draws(layout, cell, origin) {
-            draw.draw(canvas, paint);
-        }
+    for draw in layout_draws(layout).cells.iter().flatten() {
+        draw.draw(canvas, paint, origin.into());
     }
 }
 
@@ -319,14 +359,14 @@ fn paint_glyphs(
 pub fn paint_text_vertical(
     canvas: &Canvas,
     text_content: &TextContent,
+    bounds: &Rect,
     vertical_align: VerticalAlign,
 ) -> bool {
     if !text_content.is_vertical() {
         return false;
     }
-    let bounds = text_content.bounds();
-    let layout = layout_for_box(text_content, bounds.height());
-    paint_layout(canvas, &layout, &bounds, vertical_align);
+    let layout = text_content.vertical_layout(bounds);
+    paint_layout(canvas, &layout, bounds, vertical_align);
     true
 }
 
@@ -336,15 +376,15 @@ pub fn paint_text_vertical(
 pub fn paint_text_vertical_with(
     canvas: &Canvas,
     text_content: &TextContent,
+    bounds: &Rect,
     vertical_align: VerticalAlign,
     paint: &Paint,
 ) -> bool {
     if !text_content.is_vertical() {
         return false;
     }
-    let bounds = text_content.bounds();
-    let layout = layout_for_box(text_content, bounds.height());
-    paint_glyphs(canvas, &layout, &bounds, vertical_align, paint);
+    let layout = text_content.vertical_layout(bounds);
+    paint_glyphs(canvas, &layout, bounds, vertical_align, paint);
     true
 }
 
@@ -358,30 +398,31 @@ fn paths_from_layout(
 ) -> Vec<(skia::Path, Paint)> {
     let mut paths = Vec::new();
     let origin = layout.origin(bounds, vertical_align);
-    for cell in &layout.cells {
+    let draws = layout_draws(layout);
+    for (cell, cell_draws) in layout.cells.iter().zip(&draws.cells) {
         let paint = &layout.paints[cell.paint];
-        for draw in cell_draws(layout, cell, origin) {
-            push_text_path(&mut paths, draw.into_path(), paint, antialias);
+        for draw in cell_draws {
+            push_text_path(&mut paths, draw.path(origin.into()), paint, antialias);
         }
         for rect in decoration_rects(layout, cell, origin) {
             push_text_path(&mut paths, skia::Path::rect(rect, None), paint, antialias);
         }
     }
-    for ruby in &layout.ruby_cells {
-        for draw in ruby_draws(layout, ruby, origin) {
+    for (ruby, ruby_draws) in layout.ruby_cells.iter().zip(&draws.ruby) {
+        for draw in ruby_draws {
             push_text_path(
                 &mut paths,
-                draw.into_path(),
+                draw.path(origin.into()),
                 &layout.paints[ruby.paint],
                 antialias,
             );
         }
     }
-    for mark in &layout.emphasis_marks {
-        if let Some(draw) = emphasis_draw(layout, mark, origin) {
+    for (mark, draw) in layout.emphasis_marks.iter().zip(&draws.emphasis) {
+        if let Some(draw) = draw {
             push_text_path(
                 &mut paths,
-                draw.into_path(),
+                draw.path(origin.into()),
                 &layout.paints[layout.cells[mark.cell].paint],
                 antialias,
             );
@@ -400,7 +441,7 @@ pub fn vertical_text_paths(
         return Vec::new();
     }
     let bounds = text_content.bounds();
-    let layout = layout_for_box(text_content, bounds.height());
+    let layout = text_content.vertical_layout(&bounds);
     paths_from_layout(&layout, &bounds, vertical_align, antialias)
 }
 
@@ -639,6 +680,36 @@ mod tests {
     use super::super::test_support::*;
     use super::*;
     use crate::shapes::{StrokeStyle, TextEmphasis, TextOrientation, TextSpan};
+
+    #[test]
+    fn glyph_draws_are_built_once_and_follow_the_origin() {
+        let content = make_content(&["あくABC"], 1000.0);
+        let provider = provider_with_fallback(TEST_FONT, VMTX_TEST_FONT);
+        let layout = layout_with_fallback(&provider, &content, 1000.0, &["fallback".to_string()]);
+        let bounds = content.bounds();
+        assert!(layout.draws.get().is_none());
+
+        let paths = paths_from_layout(&layout, &bounds, VerticalAlign::Top, true);
+        let draws = layout
+            .draws
+            .get()
+            .expect("the first paint builds the draws") as *const _;
+        let shifted = paths_from_layout(
+            &layout,
+            &bounds.with_offset((30.0, 40.0)),
+            VerticalAlign::Top,
+            true,
+        );
+
+        assert!(std::ptr::eq(draws, layout.draws.get().unwrap()));
+        assert!(paths.len() >= 3, "upright and sideways glyphs are drawn");
+        assert_eq!(paths.len(), shifted.len());
+        for ((path, _), (moved, _)) in paths.iter().zip(&shifted) {
+            let (a, b) = (path.bounds(), moved.bounds());
+            assert!((b.left - a.left - 30.0).abs() < 0.01, "{a:?} -> {b:?}");
+            assert!((b.top - a.top - 40.0).abs() < 0.01, "{a:?} -> {b:?}");
+        }
+    }
 
     #[test]
     fn shape_to_path_places_vertical_glyphs_down_the_column() {

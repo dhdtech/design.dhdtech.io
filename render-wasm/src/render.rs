@@ -1575,8 +1575,12 @@ impl RenderState {
                     let rebound_text_content =
                         stored_text_content.paint_content_for_selrect(shape.selrect());
                     let text_content = rebound_text_content.as_ref();
-                    let mut paragraph_builders =
-                        text_content.paragraph_builder_group_from_text(None);
+                    // Vertical text paints from its cached vertical layout.
+                    let mut paragraph_builders = if text_content.is_vertical() {
+                        Vec::new()
+                    } else {
+                        text_content.paragraph_builder_group_from_text(None)
+                    };
                     text::render(
                         Some(self),
                         None,
@@ -1843,7 +1847,7 @@ impl RenderState {
                                 }
                             }
 
-                            if shape.has_visible_strokes() && text_content.has_non_ascii() {
+                            if shape.has_visible_strokes() && text_content.has_emoji() {
                                 let mut emoji_builders =
                                     text_content.paragraph_builder_group_opaque();
                                 let mut deco_builders =
@@ -1881,23 +1885,34 @@ impl RenderState {
 
                             let inner_shadows = shape.inner_shadow_paints();
                             let blur_filter = shape.image_filter(1.);
-                            let mut paragraphs_with_shadows =
-                                text_content.paragraph_builder_group_from_text(Some(true));
+                            // Shadow builder groups only serve shadow passes.
+                            let needs_shadow_groups = parent_shadows.is_some()
+                                || !drop_shadows.is_empty()
+                                || !inner_shadows.is_empty();
+                            let mut paragraphs_with_shadows = if needs_shadow_groups {
+                                text_content.paragraph_builder_group_from_text(Some(true))
+                            } else {
+                                Vec::new()
+                            };
                             let (mut stroke_paragraphs_with_shadows_list, _shadow_opacities): (
                                 Vec<_>,
                                 Vec<_>,
-                            ) = shape
-                                .visible_strokes()
-                                .rev()
-                                .map(|stroke| {
-                                    text::stroke_paragraph_builder_group_from_text(
-                                        text_content,
-                                        stroke,
-                                        &shape.selrect(),
-                                        Some(true),
-                                    )
-                                })
-                                .unzip();
+                            ) = if needs_shadow_groups {
+                                shape
+                                    .visible_strokes()
+                                    .rev()
+                                    .map(|stroke| {
+                                        text::stroke_paragraph_builder_group_from_text(
+                                            text_content,
+                                            stroke,
+                                            &shape.selrect(),
+                                            Some(true),
+                                        )
+                                    })
+                                    .unzip()
+                            } else {
+                                (Vec::new(), Vec::new())
+                            };
 
                             if let Some(parent_shadows) = parent_shadows {
                                 if !skip_drop_shadows {
@@ -2021,7 +2036,7 @@ impl RenderState {
                                     }
                                 }
 
-                                if shape.has_visible_strokes() && text_content.has_non_ascii() {
+                                if shape.has_visible_strokes() && text_content.has_emoji() {
                                     let mut emoji_builders =
                                         text_content.paragraph_builder_group_opaque();
                                     let mut deco_builders =

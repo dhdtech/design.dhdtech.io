@@ -13,6 +13,7 @@
    [app.main.ui.shapes.text.styles :as text-styles]
    [app.main.ui.workspace.sidebar.options.common :refer [radio-selected]]
    [app.main.ui.workspace.sidebar.options.menus.text-japanese-layout :as tjl]
+   [app.util.text.writing-mode :as wm]
    [cljs.test :as t :include-macros true]
    [cuerdas.core :as str]
    [rumext.v2 :as mf]))
@@ -32,16 +33,13 @@
 
 
 (t/deftest japanese-layout-controls-follow-file-or-profile-configuration
-  (t/is (false? (tjl/japanese-layout-config-enabled? {} {})))
-  (t/is (true? (tjl/japanese-layout-config-enabled?
-                {:options {:japanese-layout true}}
-                {})))
-  (t/is (true? (tjl/japanese-layout-config-enabled?
-                {}
-                {:props {:japanese-layout-all-files true}})))
-  (t/is (true? (tjl/japanese-layout-config-enabled?
-                {:options {:japanese-layout true}}
-                {:props {:japanese-layout-all-files false}}))))
+  (with-redefs [wm/vertical-layout-active? (constantly true)]
+    (t/is (false? (tjl/japanese-layout-config-enabled? {})))
+    (t/is (false? (tjl/japanese-layout-config-enabled? {:file? false :all-files? false})))
+    (t/is (true? (tjl/japanese-layout-config-enabled? {:file? true :all-files? false})))
+    (t/is (true? (tjl/japanese-layout-config-enabled? {:file? false :all-files? true}))))
+  (with-redefs [wm/vertical-layout-active? (constantly false)]
+    (t/is (false? (tjl/japanese-layout-config-enabled? {:file? true :all-files? true})))))
 
 (t/deftest text-emphasis-select-reports-and-restores-canonical-values
   (let [options     (tjl/text-emphasis-options identity)

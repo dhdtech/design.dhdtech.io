@@ -59,7 +59,8 @@ impl TextPaths {
         origin: Point,
         paths: &mut Vec<skia::Path>,
     ) {
-        for deco in decoration_segments(paragraph, text_paragraph, origin.x, origin.y) {
+        let offsets = crate::shapes::HorizontalOffsets::new(text_paragraph);
+        for deco in decoration_segments(paragraph, text_paragraph, &offsets, origin.x, origin.y) {
             let mut builder = skia::PathBuilder::new();
             builder.add_rect(deco.rect(), None, None);
             paths.push(builder.detach());

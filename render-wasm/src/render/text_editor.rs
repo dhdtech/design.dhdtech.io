@@ -144,9 +144,9 @@ fn paragraphs_vertical_offset(
 fn vertical_layout_for_shape(
     text_content: &TextContent,
     shape: &Shape,
-) -> (text_vertical::VerticalLayout, f32) {
+) -> (std::rc::Rc<text_vertical::VerticalLayout>, f32) {
     let selrect = shape.selrect();
-    let layout = text_vertical::layout_for_box(text_content, selrect.height());
+    let layout = text_content.vertical_layout(&selrect);
     let origin_x =
         text_vertical::block_axis_offset(selrect.width(), layout.width, shape.vertical_align());
     (layout, origin_x)

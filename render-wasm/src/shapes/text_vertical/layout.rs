@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use skia_safe::{
     self as skia,
     textlayout::{TextDecoration, TypefaceFontProvider},
@@ -16,7 +18,7 @@ use crate::utils::get_fallback_fonts;
 
 use super::annotations::{
     grow_ruby_bases, layout_emphasis, layout_ruby, ruby_base_units, ruby_rooms,
-    set_ruby_overhang_rooms, spread_ruby_base_cells, EmphasisMark, RubyCell,
+    set_ruby_overhang_rooms, spread_ruby_base_cells, EmphasisMark, RubyCell, RubyRooms,
 };
 use super::cells::{Fonts, SpanCells, WarichuNote};
 use super::flow::{
@@ -24,6 +26,7 @@ use super::flow::{
     is_bounded, materialize_explicit_pair_spacing, ordered_expansion_offsets,
     plan_with_edge_trimming, preferred_pair_spacing, shed_punctuation_aki, FlowCell, FIT_TOLERANCE,
 };
+use super::paint::LayoutDraws;
 use super::shaping::ShapedRun;
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +72,7 @@ pub enum CellKind {
 
 /// One placed piece of the vertical flow. Offsets are UTF-16,
 /// paragraph-relative (all spans concatenated), in original text space.
+#[derive(Clone)]
 pub struct VerticalCell {
     pub kind: CellKind,
     pub paragraph: usize,
@@ -134,6 +138,8 @@ pub struct VerticalLayout {
     pub paragraph_utf16_boundaries: Vec<Vec<usize>>,
     pub width: f32,
     pub height: f32,
+    /// Glyph draws, built on the first paint.
+    pub(super) draws: OnceCell<LayoutDraws>,
 }
 
 impl VerticalLayout {
@@ -237,79 +243,98 @@ impl ColumnGeometry {
     }
 }
 
-/// The paragraph's cells in flow order, before spacing and placement, the
-/// UTF-16 start of every span in the paragraph's layout text, and its warichu
-/// notes. Notes break into pieces at the paragraph UTF-16 `warichu_splits`.
-#[allow(clippy::too_many_arguments)]
-fn build_paragraph_flow<'a>(
-    fonts: &'a Fonts,
-    paragraph_index: usize,
-    paragraph: &'a Paragraph,
-    transforms: &'a [AppliedTextTransform],
-    bounds: Rect,
-    warichu_splits: &[usize],
-    runs: &mut Vec<ShapedRun>,
-    paints: &mut Vec<skia::Paint>,
-) -> (Vec<FlowCell>, Vec<usize>, Vec<WarichuNote<'a>>) {
-    let mut flow = Vec::new();
-    let mut span_starts = Vec::with_capacity(transforms.len());
-    let mut notes: Vec<WarichuNote<'a>> = Vec::new();
-    let mut note_members = Vec::new();
-    let mut offset = 0usize;
-    for (span_index, (span, transform)) in paragraph.children().iter().zip(transforms).enumerate() {
-        span_starts.push(offset);
-        if transform.text.is_empty() {
-            continue;
-        }
-        paints.push(merge_fills(&span.fills, bounds));
-        let span_cells = SpanCells::new(
-            fonts,
-            span,
-            paragraph_index,
-            span_index,
-            paints.len() - 1,
-            offset,
-        );
-        if span.warichu {
-            note_members.push((span_cells, transform.text.as_str()));
-        } else {
-            flush_warichu_note(
-                &mut note_members,
-                &mut notes,
-                warichu_splits,
-                runs,
-                &mut flow,
-            );
-            span_cells.push(&transform.text, runs, &mut flow);
-        }
-        offset += transform.text.encode_utf16().count();
-    }
-    flush_warichu_note(
-        &mut note_members,
-        &mut notes,
-        warichu_splits,
-        runs,
-        &mut flow,
-    );
-    keep_transform_expansions_together(&mut flow, transforms, &span_starts);
-    keep_ruby_bases_together(&mut flow, paragraph);
-    (flow, span_starts, notes)
+/// A run of the paragraph flow: shaped cells, or the warichu note at an
+/// index of `ParagraphCells::notes`.
+enum FlowSegment {
+    Shaped(Vec<FlowCell>),
+    Note(usize),
 }
 
-/// Push the warichu note gathered in `members`, if any, and keep it.
-fn flush_warichu_note<'a>(
-    members: &mut Vec<(SpanCells<'a>, &'a str)>,
-    notes: &mut Vec<WarichuNote<'a>>,
-    warichu_splits: &[usize],
-    runs: &mut Vec<ShapedRun>,
-    flow: &mut Vec<FlowCell>,
-) {
-    if members.is_empty() {
-        return;
+/// A paragraph shaped once for warichu planning. Spans outside warichu are
+/// shaped up front; each plan only reshapes the notes.
+struct ParagraphCells<'a> {
+    paragraph: &'a Paragraph,
+    transforms: &'a [AppliedTextTransform],
+    segments: Vec<FlowSegment>,
+    notes: Vec<WarichuNote<'a>>,
+    /// UTF-16 start of every span in the paragraph's layout text.
+    span_starts: Vec<usize>,
+}
+
+impl<'a> ParagraphCells<'a> {
+    /// Shapes the spans outside warichu into `runs` and adds one paint per
+    /// span to `paints`.
+    fn new(
+        fonts: &'a Fonts,
+        paragraph_index: usize,
+        paragraph: &'a Paragraph,
+        transforms: &'a [AppliedTextTransform],
+        bounds: Rect,
+        runs: &mut Vec<ShapedRun>,
+        paints: &mut Vec<skia::Paint>,
+    ) -> Self {
+        let mut segments = Vec::new();
+        let mut notes: Vec<WarichuNote<'a>> = Vec::new();
+        let mut span_starts = Vec::with_capacity(transforms.len());
+        let mut note_members = Vec::new();
+        let mut offset = 0usize;
+        let mut flush_note = |members: &mut Vec<_>, segments: &mut Vec<FlowSegment>| {
+            if !members.is_empty() {
+                segments.push(FlowSegment::Note(notes.len()));
+                notes.push(WarichuNote::new(std::mem::take(members)));
+            }
+        };
+        for (span_index, (span, transform)) in
+            paragraph.children().iter().zip(transforms).enumerate()
+        {
+            span_starts.push(offset);
+            if transform.text.is_empty() {
+                continue;
+            }
+            paints.push(merge_fills(&span.fills, bounds));
+            let span_cells = SpanCells::new(
+                fonts,
+                span,
+                paragraph_index,
+                span_index,
+                paints.len() - 1,
+                offset,
+            );
+            if span.warichu {
+                note_members.push((span_cells, transform.text.as_str()));
+            } else {
+                flush_note(&mut note_members, &mut segments);
+                let mut cells = Vec::new();
+                span_cells.push(&transform.text, runs, &mut cells);
+                segments.push(FlowSegment::Shaped(cells));
+            }
+            offset += transform.text.encode_utf16().count();
+        }
+        flush_note(&mut note_members, &mut segments);
+        Self {
+            paragraph,
+            transforms,
+            segments,
+            notes,
+            span_starts,
+        }
     }
-    let note = WarichuNote::new(std::mem::take(members));
-    note.push(warichu_splits, runs, flow);
-    notes.push(note);
+
+    /// The paragraph's cells in flow order, before spacing and placement,
+    /// with notes broken into pieces at the paragraph UTF-16
+    /// `warichu_splits`. Note runs go to the end of `runs`.
+    fn flow(&self, warichu_splits: &[usize], runs: &mut Vec<ShapedRun>) -> Vec<FlowCell> {
+        let mut flow = Vec::new();
+        for segment in &self.segments {
+            match segment {
+                FlowSegment::Shaped(cells) => flow.extend(cells.iter().cloned()),
+                FlowSegment::Note(note) => self.notes[*note].push(warichu_splits, runs, &mut flow),
+            }
+        }
+        keep_transform_expansions_together(&mut flow, self.transforms, &self.span_starts);
+        keep_ruby_bases_together(&mut flow, self.paragraph);
+        flow
+    }
 }
 
 /// Most warichu breaks planned per paragraph.
@@ -500,7 +525,7 @@ pub fn layout_vertical(
     let mut cells: Vec<VerticalCell> = Vec::new();
     let mut columns: Vec<VerticalColumn> = Vec::new();
     let mut paragraph_columns: Vec<(usize, usize)> = Vec::new();
-    let mut all_ruby_rooms = Vec::new();
+    let mut all_ruby_rooms = RubyRooms::new();
     let mut span_utf16_starts: Vec<Vec<usize>> = Vec::new();
 
     for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
@@ -513,21 +538,21 @@ pub fn layout_vertical(
 
         // Plan, then break the first warichu piece that does not fit where
         // it starts and plan again, until every piece fits.
-        let (run_mark, paint_mark) = (runs.len(), paints.len());
+        let paragraph_cells = ParagraphCells::new(
+            &fonts,
+            paragraph_index,
+            paragraph,
+            transforms,
+            bounds,
+            &mut runs,
+            &mut paints,
+        );
+        let span_starts = paragraph_cells.span_starts.clone();
+        let run_mark = runs.len();
         let mut warichu_splits: Vec<usize> = Vec::new();
-        let (flow, span_starts, ruby_units, classes, pair_spacing_em, placements) = loop {
+        let (flow, ruby_units, classes, pair_spacing_em, placements) = loop {
             runs.truncate(run_mark);
-            paints.truncate(paint_mark);
-            let (mut flow, span_starts, notes) = build_paragraph_flow(
-                &fonts,
-                paragraph_index,
-                paragraph,
-                transforms,
-                bounds,
-                &warichu_splits,
-                &mut runs,
-                &mut paints,
-            );
+            let mut flow = paragraph_cells.flow(&warichu_splits, &mut runs);
             let mut ruby_units = ruby_base_units(paragraph, transforms, &span_starts);
 
             apply_inter_script_spacing(&mut flow);
@@ -541,22 +566,19 @@ pub fn layout_vertical(
             let placements =
                 plan_with_edge_trimming(&mut flow, &classes, &mut pair_spacing_em, max_height);
             let split = if warichu_splits.len() < MAX_WARICHU_SPLITS {
-                next_warichu_split(&notes, &flow, &placements, &warichu_splits, max_height)
+                next_warichu_split(
+                    &paragraph_cells.notes,
+                    &flow,
+                    &placements,
+                    &warichu_splits,
+                    max_height,
+                )
             } else {
                 None
             };
             match split {
                 Some(split) => warichu_splits.push(split),
-                None => {
-                    break (
-                        flow,
-                        span_starts,
-                        ruby_units,
-                        classes,
-                        pair_spacing_em,
-                        placements,
-                    )
-                }
+                None => break (flow, ruby_units, classes, pair_spacing_em, placements),
             }
         };
         let tops = aligned_tops(
@@ -638,11 +660,17 @@ pub fn layout_vertical(
         paragraph_utf16_boundaries,
         width,
         height,
+        draws: OnceCell::new(),
     }
 }
 
-/// Lay out with the render state's font store.
-fn layout_from_content(text_content: &TextContent, max_height: f32) -> VerticalLayout {
+/// Lay out with the render state's font store; span paints resolve against
+/// `bounds`.
+fn layout_from_content(
+    text_content: &TextContent,
+    max_height: f32,
+    bounds: Rect,
+) -> VerticalLayout {
     let font_provider = get_resources().fonts.font_provider();
     let fallback_mgr = FontMgr::from(font_provider.clone());
     let fallback_families: Vec<String> = get_fallback_fonts().iter().cloned().collect();
@@ -652,20 +680,29 @@ fn layout_from_content(text_content: &TextContent, max_height: f32) -> VerticalL
         font_provider,
         fallback_mgr,
         &fallback_families,
+        bounds,
+    )
+}
+
+/// Lay out the content for a box `height` tall, against its stored bounds.
+#[cfg(test)]
+pub(super) fn layout_for_box(text_content: &TextContent, height: f32) -> VerticalLayout {
+    layout_from_content(
+        text_content,
+        wrap_height(text_content, height),
         text_content.bounds(),
     )
 }
 
-/// Production entry point: lay out the content for a box `height` tall.
-pub fn layout_for_box(text_content: &TextContent, height: f32) -> VerticalLayout {
-    layout_from_content(text_content, wrap_height(text_content, height))
-}
-
-/// Content size (width, height) of the vertical layout for a box `height`
-/// tall, for auto-sizing.
-pub fn measure_content(text_content: &TextContent, height: f32) -> (f32, f32) {
-    let layout = layout_for_box(text_content, height);
-    (layout.width, layout.height)
+/// Lay out the content for the box `rect`: its height is the column-wrap
+/// budget and span paints resolve against it. Production code goes through
+/// the cached `TextContent::vertical_layout`.
+pub fn layout_for_rect(text_content: &TextContent, rect: &Rect) -> VerticalLayout {
+    layout_from_content(
+        text_content,
+        wrap_height(text_content, rect.height()),
+        *rect,
+    )
 }
 
 #[cfg(test)]
@@ -673,6 +710,60 @@ mod tests {
     use super::super::test_support::*;
     use super::*;
     use crate::shapes::TextOrientation;
+
+    fn with_headless_fonts<T>(test: impl FnOnce() -> T) -> T {
+        let mut resources =
+            crate::render::RenderResources::try_new_headless().expect("headless resources");
+        let _guard = crate::globals::TestRenderResourcesGuard::install(&mut resources);
+        test()
+    }
+
+    #[test]
+    fn vertical_layout_is_cached_until_the_content_changes() {
+        with_headless_fonts(|| {
+            let mut content = make_content(&["あいう"], 100.0);
+            let rect = Rect::from_xywh(0.0, 0.0, 60.0, 100.0);
+            let first = content.vertical_layout(&rect);
+
+            assert!(std::rc::Rc::ptr_eq(&first, &content.vertical_layout(&rect)));
+            assert!(
+                std::rc::Rc::ptr_eq(&first, &content.clone().vertical_layout(&rect)),
+                "clones share the cached layout"
+            );
+            let taller = Rect::from_xywh(0.0, 0.0, 60.0, 200.0);
+            assert!(!std::rc::Rc::ptr_eq(
+                &first,
+                &content.vertical_layout(&taller)
+            ));
+
+            content.paragraphs_mut()[0].children_mut()[0].text = "えお".to_string();
+            let edited = content.vertical_layout(&rect);
+            assert!(!std::rc::Rc::ptr_eq(&first, &edited));
+            assert_eq!(edited.cells.len(), 2, "an edit lays out again");
+        });
+    }
+
+    #[test]
+    fn vertical_layout_wraps_at_the_given_box_not_the_stored_bounds() {
+        with_headless_fonts(|| {
+            // Stored bounds are taller than the shape, as after measuring a fixed text.
+            let content = make_content(&["あいうえ"], 1000.0);
+            let wide = content.vertical_layout(&Rect::from_xywh(0.0, 0.0, 60.0, 1000.0));
+            let height = wide.cells[0].extent * 2.0 + 1.0;
+            let layout = content.vertical_layout(&Rect::from_xywh(0.0, 0.0, 60.0, height));
+            assert_ne!(layout.cells[0].column, layout.cells[3].column);
+        });
+    }
+
+    #[test]
+    fn update_layout_of_vertical_text_skips_the_horizontal_layout() {
+        with_headless_fonts(|| {
+            let mut content = make_content(&["あいう"], 100.0);
+            content.update_layout(Rect::from_xywh(0.0, 0.0, 60.0, 100.0));
+            assert!(!content.needs_update_layout());
+            assert!(content.layout.paragraphs.iter().all(Vec::is_empty));
+        });
+    }
 
     fn warichu_span(text: &str) -> TextSpan {
         TextSpan {
