@@ -64,6 +64,26 @@ impl ShapedRun {
         })
     }
 
+    /// Flow offset from the run start of each scalar boundary (0..=`chars`)
+    /// of a sideways run, from its glyph positions; the last boundary is
+    /// `extent`. A scalar inside a ligature takes the next glyph's position.
+    pub(super) fn scalar_flow_offsets(&self, extent: f32, chars: usize) -> Option<Vec<f32>> {
+        let origin = self.positions.first()?.x;
+        let mut offsets = Vec::with_capacity(chars + 1);
+        let mut utf8 = self.utf8_range.start;
+        for ch in self.text.chars().take(chars) {
+            let flow = self
+                .clusters
+                .iter()
+                .position(|cluster| *cluster as usize >= utf8)
+                .map_or(extent, |glyph| self.positions[glyph].x - origin);
+            offsets.push(flow);
+            utf8 += ch.len_utf8();
+        }
+        offsets.push(extent);
+        (offsets.len() == chars + 1).then_some(offsets)
+    }
+
     /// Summed horizontal advance of a cluster.
     pub(super) fn cluster_advance(&self, glyph: usize, count: usize) -> f32 {
         self.advances[glyph..glyph + count].iter().sum()

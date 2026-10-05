@@ -287,3 +287,52 @@
   (let [text   (plugins.text/add-text-props #js {:$id (random-uuid) :$page (random-uuid)} plugin-id)
         result (capture-japanese-update text "ruby" "" two-span-content)]
     (t/is (= {:ruby ""} (:attrs result)))))
+
+(defn- text-proxy-over
+  [content]
+  [(plugins.text/add-text-props #js {:$id (random-uuid) :$page (random-uuid)} plugin-id)
+   {:content content}])
+
+(t/deftest text-japanese-getters-report-defaults-when-unset
+  (let [[^js text shape] (text-proxy-over two-span-content)]
+    (with-redefs [u/proxy->shape (constantly shape)]
+      (t/is (= "horizontal-tb" (.-writingMode text)))
+      (t/is (= "mixed" (.-textOrientation text)))
+      (t/is (= "none" (.-textCombineUpright text)))
+      (t/is (= "none" (.-textEmphasis text)))
+      (t/is (= "none" (.-warichu text)))
+      (t/is (= "none" (.-fontFeatures text)))
+      (t/is (= "none" (.-annotationClearance text)))
+      (t/is (= "half" (.-rubySize text)))
+      (t/is (false? (.-rubyHidden text)))
+      (t/is (nil? (.-ruby text))))))
+
+(t/deftest text-orientation-is-a-whole-shape-value
+  (let [content {:type "root"
+                 :children [{:type "paragraph-set"
+                             :children [{:type "paragraph"
+                                         :text-orientation "upright"
+                                         :children [{:text "縦"}]}
+                                        {:type "paragraph"
+                                         :children [{:text "書き"}]}]}]}
+        [^js text shape] (text-proxy-over content)]
+    (with-redefs [u/proxy->shape (constantly shape)]
+      (t/is (= "upright" (.-textOrientation text))))))
+
+(t/deftest ruby-hidden-is-exposed-on-text-and-ranges
+  (let [range  (plugins.text/text-range-proxy plugin-id (random-uuid) (random-uuid) (random-uuid) 0 1)
+        result (capture-japanese-update range "rubyHidden" true two-span-content)
+        bad    (capture-japanese-update range "rubyHidden" "yes" two-span-content)
+        [text] (text-proxy-over two-span-content)
+        shape  (capture-japanese-update text "rubyHidden" false two-span-content)]
+    (t/is (= {:ruby-hidden true} (:attrs result)))
+    (t/is (nil? (:attrs bad)))
+    (t/is (= {:ruby-hidden false} (:attrs shape)))))
+
+(t/deftest text-japanese-getters-treat-unset-spans-as-default
+  (let [content (assoc-in two-span-content
+                          [:children 0 :children 0 :children 0 :text-emphasis]
+                          "none")
+        [^js text shape] (text-proxy-over content)]
+    (with-redefs [u/proxy->shape (constantly shape)]
+      (t/is (= "none" (.-textEmphasis text))))))

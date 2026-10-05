@@ -16,6 +16,18 @@
    [cuerdas.core :as str]
    [rumext.v2 :as mf]))
 
+(defn- text-children
+  "Text of a node, with each combined digit run of a `digits` tate-chu-yoko
+   in its own `all` span."
+  [text node]
+  (if-let [segments (jl/digit-combine-segments text (:text-combine-upright node))]
+    (into-array
+     (for [[index [run combine?]] (d/enumerate segments)]
+       (if combine?
+         (mf/html [:span {:key index :style sts/tcy-run-style} run])
+         run)))
+    text))
+
 (mf/defc render-text*
   [{:keys [node parent shape]}]
   (let [text  (:text node)
@@ -25,10 +37,10 @@
         ruby  (jl/visible-ruby node)]
     (if (some? ruby)
       [:ruby.ruby-node {:style (sts/generate-ruby-container-styles node)}
-       [:span.text-node {:style style} text]
+       [:span.text-node {:style style} (text-children text node)]
        [:rt {:style (sts/generate-ruby-styles shape node)} ruby]]
       [:span.text-node {:style style}
-       (if (= text "") "\u00A0" text)])))
+       (if (= text "") "\u00A0" (text-children text node))])))
 
 (mf/defc render-root*
   [{:keys [node children shape]}]

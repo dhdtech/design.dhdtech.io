@@ -89,24 +89,29 @@ impl JapaneseClass {
                 | Self::MiddleDot
                 | Self::FullStop
                 | Self::Comma
-                | Self::Inseparable
                 | Self::IterationMark
                 | Self::ProlongedSoundMark
                 | Self::SmallKana
-                | Self::PostfixedAbbreviation
                 | Self::WarichuClosing
         )
     }
 
     pub const fn forbids_line_end(self) -> bool {
-        matches!(
-            self,
-            Self::OpeningBracket | Self::PrefixedAbbreviation | Self::WarichuOpening
-        )
+        matches!(self, Self::OpeningBracket | Self::WarichuOpening)
     }
 
     pub const fn is_japanese_letter(self) -> bool {
         matches!(self, Self::Hiragana | Self::Katakana | Self::Ideographic)
+    }
+
+    /// Kana, kanji and the marks that read as part of a word: small kana,
+    /// the prolonged sound mark and iteration marks.
+    pub const fn is_japanese_text(self) -> bool {
+        self.is_japanese_letter()
+            || matches!(
+                self,
+                Self::SmallKana | Self::ProlongedSoundMark | Self::IterationMark
+            )
     }
 
     pub const fn is_western_run(self) -> bool {
@@ -211,9 +216,7 @@ const fn generated_pair_rules() -> [[PairRule; JapaneseClass::COUNT]; JapaneseCl
             if before_index == after_index
                 && matches!(
                     before,
-                    JapaneseClass::Inseparable
-                        | JapaneseClass::GroupedNumeral
-                        | JapaneseClass::Western
+                    JapaneseClass::GroupedNumeral | JapaneseClass::Western
                 )
             {
                 rule.break_allowed = false;
@@ -225,8 +228,8 @@ const fn generated_pair_rules() -> [[PairRule; JapaneseClass::COUNT]; JapaneseCl
                 rule.maximum_em = 0.5;
                 rule.shrink_priority = 1;
                 rule.expand_priority = 1;
-            } else if (before.is_japanese_letter() && after.is_western_run())
-                || (before.is_western_run() && after.is_japanese_letter())
+            } else if (before.is_japanese_text() && after.is_western_run())
+                || (before.is_western_run() && after.is_japanese_text())
             {
                 rule.preferred_em = 0.25;
                 rule.minimum_em = 0.125;
@@ -253,10 +256,20 @@ const fn generated_pair_rules() -> [[PairRule; JapaneseClass::COUNT]; JapaneseCl
                 rule.maximum_em = 0.25;
                 rule.expand_priority = 3;
             } else if matches!(before, JapaneseClass::DividingPunctuation)
-                && !matches!(after, JapaneseClass::ClosingBracket)
+                && !matches!(
+                    after,
+                    JapaneseClass::ClosingBracket
+                        | JapaneseClass::DividingPunctuation
+                        | JapaneseClass::IdeographicSpace
+                        | JapaneseClass::WesternWordSpace
+                        | JapaneseClass::FullStop
+                        | JapaneseClass::Comma
+                        | JapaneseClass::MiddleDot
+                )
             {
                 // A sentence-ending question/exclamation mark carries one em
-                // after it. Line planning may drop it at the line edge.
+                // after it, unless punctuation or a typed space follows. Line
+                // planning may drop it at the line edge.
                 rule.preferred_em = 1.0;
                 rule.minimum_em = 0.0;
                 rule.maximum_em = 1.0;
@@ -335,22 +348,23 @@ pub const fn pair_rule(before: JapaneseClass, after: JapaneseClass) -> PairRule 
     PAIR_RULES[before.index()][after.index()]
 }
 
-const OPENING_BRACKETS: &str = "（〔［｛〈《「『【〖〘〚‘“";
-const CLOSING_BRACKETS: &str = "）〕］｝〉》」』】〗〙〛’”";
+const OPENING_BRACKETS: &str = "（〔［｛〈《「『【〖〘〚‘“〝«⦅｟｢";
+const CLOSING_BRACKETS: &str = "）〕］｝〉》」』】〗〙〛’”〟〞»⦆｠｣";
 const HYPHENS: &str = "‐゠–〜～";
 const DIVIDING_PUNCTUATION: &str = "！？‼⁇⁈⁉";
 const MIDDLE_DOTS: &str = "・･：；";
-const FULL_STOPS: &str = "。．";
-const COMMAS: &str = "、，";
-const INSEPARABLE: &str = "―…‥〳〴〵";
+const FULL_STOPS: &str = "。．｡";
+const COMMAS: &str = "、，､";
+const INSEPARABLE: &str = "—―…‥〳〴〵";
 const ITERATION_MARKS: &str = "々〻ゝゞヽヾ";
 const SMALL_KANA: &str = concat!(
     "ぁぃぅぇぉっゃゅょゎゕゖ",
-    "ァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ"
+    "ァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿ",
+    "ｧｨｩｪｫｬｭｮｯ"
 );
-const PREFIXED_ABBREVIATIONS: &str = "￥¥＄$￡£＃#";
-const POSTFIXED_ABBREVIATIONS: &str = "°′″℃￠¢％%‰‱";
-const MATH_SYMBOLS: &str = "＝=≠＜<＞>≦≧≤≥∈∋⊆⊇⊂⊃∪∩⊄⊅⊊⊋∉⌅⌆∧∨⇒⇔∥";
+const PREFIXED_ABBREVIATIONS: &str = "￥¥＄$￡£＃#€";
+const POSTFIXED_ABBREVIATIONS: &str = concat!("°′″℃￠¢％%‰‱ℓ", "㌃㌍㌔㌘㌢㌣㌦㌧㌫㌶㌻㍉㍊㍍㍑㍗");
+const MATH_SYMBOLS: &str = "＝=≠≒≃≅≈≡≢＜<＞>≦≧≤≥≪≫≶≷⋚⋛∈∋⊆⊇⊂⊃∪∩⊄⊅⊊⊋∉⌅⌆∧∨⇒⇔↔∥∦∽∝⊥⊕⊗";
 const MATH_OPERATORS: &str = "＋+－−-÷×±∓∗∙√∫∬∭∑∏";
 
 pub fn classify(c: char) -> JapaneseClass {
@@ -372,7 +386,7 @@ pub fn classify(c: char) -> JapaneseClass {
         JapaneseClass::Inseparable
     } else if ITERATION_MARKS.contains(c) {
         JapaneseClass::IterationMark
-    } else if c == 'ー' {
+    } else if c == 'ー' || c == 'ｰ' {
         JapaneseClass::ProlongedSoundMark
     } else if SMALL_KANA.contains(c) {
         JapaneseClass::SmallKana
@@ -396,11 +410,39 @@ pub fn classify(c: char) -> JapaneseClass {
         JapaneseClass::Katakana
     } else if is_ideographic(c) {
         JapaneseClass::Ideographic
-    } else if is_unit_symbol(c) {
-        JapaneseClass::UnitSymbol
+    } else if is_squared_unit(c) {
+        JapaneseClass::PostfixedAbbreviation
+    } else if is_ideographic_symbol(c) {
+        JapaneseClass::Ideographic
     } else {
         JapaneseClass::Western
     }
+}
+
+/// Digits that group with an adjacent prefixed or postfixed abbreviation.
+fn is_numeral(c: char) -> bool {
+    c.is_ascii_digit() || matches!(u32::from(c), 0xFF10..=0xFF19)
+}
+
+/// Character pairs kept on one line beyond the class table: two identical
+/// inseparable marks (`——`, `……`), an abbreviation with its numeral
+/// (`¥100`, `60㎏`, `１００％`), per JLREQ §3.1.10, and digits of one
+/// number, full-width ones included (`２０２６`), which JLREQ would let break
+/// as ideographs. ASCII digit pairs are already grouped numerals.
+pub fn keeps_together(before: char, after: char) -> bool {
+    let before_class = classify(before);
+    (before == after && before_class == JapaneseClass::Inseparable)
+        || (is_numeral(before)
+            && is_numeral(after)
+            && !(before.is_ascii_digit() && after.is_ascii_digit()))
+        || (is_numeral(before) && classify(after) == JapaneseClass::PostfixedAbbreviation)
+        || (before_class == JapaneseClass::PrefixedAbbreviation && is_numeral(after))
+}
+
+/// Whether a line may break between two adjacent characters: the pair table
+/// (kinsoku, Western and numeral runs) plus `keeps_together`.
+pub fn break_allowed_between(before: char, after: char) -> bool {
+    pair_rule(classify(before), classify(after)).break_allowed && !keeps_together(before, after)
 }
 
 /// True for characters that only appear in Japanese text: kana, kanji, and
@@ -435,7 +477,7 @@ fn is_hiragana(c: char) -> bool {
 }
 
 fn is_katakana(c: char) -> bool {
-    matches!(u32::from(c), 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D)
+    matches!(u32::from(c), 0x30A0..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9F)
 }
 
 fn is_ideographic(c: char) -> bool {
@@ -446,11 +488,35 @@ fn is_ideographic(c: char) -> bool {
         | 0x4E00..=0x9FFF
         | 0xF900..=0xFAFF
         | 0x20000..=0x2FA1F
+        | 0x30000..=0x323AF
     ) || matches!(c, '〃' | '仝' | '〆' | '♂' | '♀')
 }
 
-fn is_unit_symbol(c: char) -> bool {
-    matches!(u32::from(c), 0x2100..=0x214F | 0x3300..=0x33FF)
+/// Squared Latin unit abbreviations (㎏, ㎡, ㏄, …), cl-13 like ％. ㏍ is a
+/// company mark, cl-19.
+fn is_squared_unit(c: char) -> bool {
+    matches!(u32::from(c), 0x3380..=0x33DF) && c != '㏍'
+}
+
+/// Symbols JLREQ sets as full-width ideographic characters (cl-19): the
+/// full-width forms, CJK symbols, circled and parenthesized characters,
+/// Roman numerals, arrows, shapes and squared words. Latin-1 symbols such
+/// as © or † stay Western, as they also appear in Latin text.
+fn is_ideographic_symbol(c: char) -> bool {
+    matches!(u32::from(c),
+        0xFF01..=0xFF5E
+        | 0x2160..=0x217F
+        | 0x2190..=0x21FF
+        | 0x2460..=0x24FF
+        | 0x25A0..=0x25FF
+        | 0x2600..=0x26FF
+        | 0x2776..=0x277F
+        | 0x3000..=0x303F
+        | 0x3200..=0x33FF
+    ) || matches!(
+        c,
+        '※' | '⁂' | '⁑' | '℡' | '✓' | '❖' | '⤴' | '⤵' | '⦿' | 'ゟ' | 'ヿ'
+    )
 }
 
 #[cfg(test)]
@@ -488,7 +554,7 @@ mod tests {
             ('＋', JapaneseClass::MathOperator),
             ('漢', JapaneseClass::Ideographic),
             ('2', JapaneseClass::GroupedNumeral),
-            ('㎏', JapaneseClass::UnitSymbol),
+            ('㎏', JapaneseClass::PostfixedAbbreviation),
             (' ', JapaneseClass::WesternWordSpace),
             ('A', JapaneseClass::Western),
         ];
@@ -588,6 +654,22 @@ mod tests {
             .preferred_em,
             1.0
         );
+        assert_eq!(
+            pair_rule(
+                JapaneseClass::DividingPunctuation,
+                JapaneseClass::DividingPunctuation
+            )
+            .preferred_em,
+            0.0
+        );
+        assert_eq!(
+            pair_rule(
+                JapaneseClass::DividingPunctuation,
+                JapaneseClass::IdeographicSpace
+            )
+            .preferred_em,
+            0.0
+        );
         let solid_japanese = pair_rule(JapaneseClass::Ideographic, JapaneseClass::Hiragana);
         assert_eq!(solid_japanese.preferred_em, 0.0);
         assert_eq!(solid_japanese.maximum_em, 0.25);
@@ -596,5 +678,102 @@ mod tests {
         assert_eq!(ruby_adjacency.preferred_em, 0.0);
         assert_eq!(ruby_adjacency.maximum_em, 0.0);
         assert_eq!(ruby_adjacency.expand_priority, 0);
+    }
+
+    #[test]
+    fn classify_follows_jlreq_appendix_a() {
+        let cases = [
+            ('—', JapaneseClass::Inseparable),
+            ('〝', JapaneseClass::OpeningBracket),
+            ('〟', JapaneseClass::ClosingBracket),
+            ('〞', JapaneseClass::ClosingBracket),
+            ('«', JapaneseClass::OpeningBracket),
+            ('»', JapaneseClass::ClosingBracket),
+            ('⦅', JapaneseClass::OpeningBracket),
+            ('⦆', JapaneseClass::ClosingBracket),
+            ('｟', JapaneseClass::OpeningBracket),
+            ('｠', JapaneseClass::ClosingBracket),
+            ('Ａ', JapaneseClass::Ideographic),
+            ('ｚ', JapaneseClass::Ideographic),
+            ('１', JapaneseClass::Ideographic),
+            ('〇', JapaneseClass::Ideographic),
+            ('〒', JapaneseClass::Ideographic),
+            ('※', JapaneseClass::Ideographic),
+            ('①', JapaneseClass::Ideographic),
+            ('㈱', JapaneseClass::Ideographic),
+            ('○', JapaneseClass::Ideographic),
+            ('★', JapaneseClass::Ideographic),
+            ('→', JapaneseClass::Ideographic),
+            ('Ⅳ', JapaneseClass::Ideographic),
+            ('㏍', JapaneseClass::Ideographic),
+            ('≒', JapaneseClass::MathSymbol),
+            ('≡', JapaneseClass::MathSymbol),
+            ('≪', JapaneseClass::MathSymbol),
+            ('≈', JapaneseClass::MathSymbol),
+            ('∝', JapaneseClass::MathSymbol),
+            ('↔', JapaneseClass::MathSymbol),
+            ('€', JapaneseClass::PrefixedAbbreviation),
+            ('㎡', JapaneseClass::PostfixedAbbreviation),
+            ('㏄', JapaneseClass::PostfixedAbbreviation),
+            ('㌔', JapaneseClass::PostfixedAbbreviation),
+            ('ℓ', JapaneseClass::PostfixedAbbreviation),
+            ('｡', JapaneseClass::FullStop),
+            ('､', JapaneseClass::Comma),
+            ('｢', JapaneseClass::OpeningBracket),
+            ('｣', JapaneseClass::ClosingBracket),
+            ('ｧ', JapaneseClass::SmallKana),
+            ('ｯ', JapaneseClass::SmallKana),
+            ('ｰ', JapaneseClass::ProlongedSoundMark),
+            ('\u{30000}', JapaneseClass::Ideographic),
+            ('\u{31350}', JapaneseClass::Ideographic),
+        ];
+        for (character, expected) in cases {
+            assert_eq!(classify(character), expected, "wrong class for {character}");
+        }
+    }
+
+    #[test]
+    fn ascii_and_latin_symbols_stay_western() {
+        for character in ['(', ')', '[', ']', 'A', '©', '†', 'α'] {
+            assert_eq!(classify(character), JapaneseClass::Western, "{character}");
+        }
+    }
+
+    #[test]
+    fn only_identical_inseparable_pairs_are_unbreakable() {
+        assert!(!JapaneseClass::Inseparable.forbids_line_start());
+        assert!(break_allowed_between('あ', '…'));
+        assert!(!break_allowed_between('…', '…'));
+        assert!(!break_allowed_between('—', '—'));
+        assert!(break_allowed_between('—', '…'));
+    }
+
+    #[test]
+    fn abbreviations_bind_only_to_numerals() {
+        assert!(!JapaneseClass::PostfixedAbbreviation.forbids_line_start());
+        assert!(!JapaneseClass::PrefixedAbbreviation.forbids_line_end());
+        assert!(!break_allowed_between('0', '㎏'));
+        assert!(!break_allowed_between('０', '％'));
+        assert!(!break_allowed_between('$', '5'));
+        assert!(!break_allowed_between('￥', '１'));
+        assert!(break_allowed_between('#', 'は'));
+        assert!(break_allowed_between('漢', '％'));
+    }
+
+    #[test]
+    fn breaks_follow_kinsoku_and_western_runs() {
+        assert!(!break_allowed_between('あ', 'っ'));
+        assert!(!break_allowed_between('「', 'あ'));
+        assert!(!break_allowed_between('P', 'e'));
+        assert!(!break_allowed_between('2', '0'));
+        assert!(break_allowed_between('あ', 'い'));
+    }
+
+    #[test]
+    fn digit_runs_stay_together() {
+        assert!(!break_allowed_between('２', '０'));
+        assert!(!break_allowed_between('2', '０'));
+        assert!(break_allowed_between('６', '年'));
+        assert!(break_allowed_between('年', '２'));
     }
 }

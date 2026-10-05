@@ -153,9 +153,11 @@ where
         };
 
         let point = Point::new(x, y);
-        if let Some(position) =
-            text_content.get_caret_position_from_shape_coords(&point, shape.vertical_align())
-        {
+        if let Some(position) = text_content.get_caret_position_from_shape_coords(
+            &point,
+            &shape.selrect(),
+            shape.vertical_align(),
+        ) {
             apply(get_text_editor_state(), text_content, &position);
         }
     })
@@ -209,9 +211,11 @@ pub extern "C" fn text_editor_pointer_down(x: f32, y: f32) {
         };
         let point = Point::new(x, y);
         get_text_editor_state().start_pointer_selection();
-        if let Some(position) =
-            text_content.get_caret_position_from_shape_coords(&point, shape.vertical_align())
-        {
+        if let Some(position) = text_content.get_caret_position_from_shape_coords(
+            &point,
+            &shape.selrect(),
+            shape.vertical_align(),
+        ) {
             get_text_editor_state().set_caret_from_position(&position);
             get_text_editor_state().update_styles(text_content);
         }
@@ -237,9 +241,11 @@ pub extern "C" fn text_editor_pointer_down_extend(x: f32, y: f32) {
         };
         let point = Point::new(x, y);
         get_text_editor_state().start_pointer_selection();
-        if let Some(position) =
-            text_content.get_caret_position_from_shape_coords(&point, shape.vertical_align())
-        {
+        if let Some(position) = text_content.get_caret_position_from_shape_coords(
+            &point,
+            &shape.selrect(),
+            shape.vertical_align(),
+        ) {
             get_text_editor_state().extend_selection_from_position(&position);
             // The click after pointerup would collapse the caret and drop the
             // selection we just extended.
@@ -273,9 +279,11 @@ pub extern "C" fn text_editor_pointer_move(x: f32, y: f32) {
             return;
         };
 
-        if let Some(position) =
-            text_content.get_caret_position_from_shape_coords(&point, shape.vertical_align())
-        {
+        if let Some(position) = text_content.get_caret_position_from_shape_coords(
+            &point,
+            &shape.selrect(),
+            shape.vertical_align(),
+        ) {
             get_text_editor_state().extend_selection_from_position(&position);
             // We need this flag to prevent handling the click behavior
             // just after a pointerup event.
@@ -304,9 +312,11 @@ pub extern "C" fn text_editor_pointer_up(x: f32, y: f32) {
         let Type::Text(text_content) = &shape.shape_type else {
             return;
         };
-        if let Some(position) =
-            text_content.get_caret_position_from_shape_coords(&point, shape.vertical_align())
-        {
+        if let Some(position) = text_content.get_caret_position_from_shape_coords(
+            &point,
+            &shape.selrect(),
+            shape.vertical_align(),
+        ) {
             get_text_editor_state().extend_selection_from_position(&position);
             get_text_editor_state().update_styles(text_content);
         }
@@ -341,9 +351,11 @@ pub extern "C" fn text_editor_set_cursor_from_offset(x: f32, y: f32) {
             return;
         };
 
-        if let Some(position) =
-            text_content.get_caret_position_from_shape_coords(&point, shape.vertical_align())
-        {
+        if let Some(position) = text_content.get_caret_position_from_shape_coords(
+            &point,
+            &shape.selrect(),
+            shape.vertical_align(),
+        ) {
             get_text_editor_state().set_caret_from_position(&position);
         }
     });
@@ -372,6 +384,7 @@ pub extern "C" fn text_editor_set_cursor_from_point(x: f32, y: f32) {
             &point,
             &view_matrix,
             &shape_matrix,
+            &shape.selrect(),
             shape.vertical_align(),
         ) {
             get_text_editor_state().set_caret_from_position(&position);

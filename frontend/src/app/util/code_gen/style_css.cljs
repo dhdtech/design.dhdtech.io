@@ -222,13 +222,19 @@ body {
        (shape->css-properties objects properties options)
        (format-css-properties options))))
 
+;; Custom properties generated code keeps; the others carry renderer state.
+(def ^:private code-custom-properties
+  #{"--paragraph-line-height"})
+
 (defn format-js-styles
   [properties _options]
   (format-css-properties
    (->> (.keys js/Object properties)
-        (remove #(str/starts-with? % "--"))
+        (filter #(or (not (str/starts-with? % "--"))
+                     (contains? code-custom-properties %)))
         (mapv (fn [key]
-                [(str/kebab key) (unchecked-get properties key)])))
+                [(if (str/starts-with? key "--") key (str/kebab key))
+                 (unchecked-get properties key)])))
    nil))
 
 (defn node->css
@@ -242,7 +248,7 @@ body {
           (sts/generate-paragraph-set-styles shape)
 
           (:paragraph "paragraph")
-          (sts/generate-paragraph-styles shape node)
+          (sts/generate-paragraph-styles shape node true)
 
           (sts/generate-text-styles shape node))]
     (dm/fmt
@@ -262,6 +268,13 @@ body {
      (dm/str shape-selector " ." (:$id node) "-rt")
      (format-js-styles (sts/generate-ruby-styles shape node) nil))))
 
+(defn- tcy-css
+  "Rule for the combined digit runs of `digits` tate-chu-yoko spans, or nil."
+  [shape shape-selector]
+  (when (some #(jl/digit-combine-segments "" (:text-combine-upright %))
+              (types.text/node-seq types.text/is-text-node? (:content shape)))
+    (dm/fmt ".% .tcy {\n%\n}" shape-selector (format-js-styles sts/tcy-run-style nil))))
+
 (defn generate-text-css
   [shape]
   (let [selector (cgc/shape->selector shape)]
@@ -272,6 +285,7 @@ body {
          (mapcat (fn [node]
                    [(node->css shape selector node)
                     (ruby-css shape selector node)]))
+         (cons (tcy-css shape selector))
          (remove nil?)
          (str/join "\n"))))
 

@@ -43,7 +43,8 @@
 (def text-font-features-attrs
   [:font-features])
 
-;; "auto" adds a half-em layer per ruby/emphasis; "none" keeps the line height.
+;; "auto" adds the ruby (at its size) and emphasis marks to the line height;
+;; "none" keeps the line height, so annotations sit in the line gap.
 (def text-annotation-clearance-attrs
   [:annotation-clearance])
 
@@ -80,6 +81,9 @@
   [text-emphasis]
   (get emphasis-mark-chars text-emphasis))
 
+;; Emphasis mark font size relative to the base font size.
+(def emphasis-font-scale 0.5)
+
 ;; Warichu sub-line font size relative to the base font size.
 (def warichu-font-scale 0.5)
 
@@ -104,6 +108,22 @@
   [node]
   (or (not (str/blank? (:ruby node)))
       (= "warichu" (:warichu node))))
+
+(defn- digit?
+  [c]
+  (let [code #?(:clj (int c) :cljs (.charCodeAt c 0))]
+    (or (<= 48 code 57) (<= 0xFF10 code 0xFF19))))
+
+(defn digit-combine-segments
+  "Text split for a `digits` tate-chu-yoko value: `[text combine?]` pairs,
+   where runs of two up to the value's maximum ASCII or full-width digits
+   combine and longer runs stay ordinary text. Nil for other values."
+  [text value]
+  (when-let [max-len (case value "digits" 4 "digits2" 2 "digits3" 3 nil)]
+    (->> (partition-by digit? (seq text))
+         (mapv (fn [chars]
+                 (let [run (apply str chars)]
+                   [run (and (digit? (first chars)) (<= 2 (count chars) max-len))]))))))
 
 (defn warichu-text?
   "True when a text node renders as warichu, which needs at least two

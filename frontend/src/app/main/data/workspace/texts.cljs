@@ -512,24 +512,23 @@
      (count (:text node)))))
 
 (defn decorate-range-info
-  "Adds information about ranges inside the metadata of the text nodes"
+  "Adds information about ranges inside the metadata of the text nodes.
+   Offsets run top-down so every node counts from its parent's start."
   [content]
-  (->> (with-meta content {:start 0 :end (count-node-chars content)})
-       (txt/transform-nodes
-        (fn [node]
-          (d/update-when
-           node
-           :children
-           (fn [children]
-             (let [start (-> node meta (:start 0))]
-               (->> children
-                    (reduce (fn [[result start] node]
-                              (let [end (+ start (count-node-chars node))]
-                                [(-> result
-                                     (conj (with-meta node {:start start :end end})))
-                                 end]))
-                            [[] start])
-                    (first)))))))))
+  (letfn [(decorate-children [node]
+            (let [start (-> node meta (:start 0))]
+              (d/update-when
+               node
+               :children
+               (fn [children]
+                 (->> children
+                      (reduce (fn [[result start] child]
+                                (let [end   (+ start (count-node-chars child))
+                                      child (with-meta child {:start start :end end})]
+                                  [(conj result (decorate-children child)) end]))
+                              [[] start])
+                      (first))))))]
+    (decorate-children (with-meta content {:start 0 :end (count-node-chars content)}))))
 
 (defn split-content-at
   [content position]

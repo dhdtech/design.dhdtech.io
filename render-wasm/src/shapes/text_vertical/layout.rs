@@ -15,8 +15,8 @@ use crate::shapes::{
 use crate::utils::get_fallback_fonts;
 
 use super::annotations::{
-    grow_ruby_bases, layout_emphasis, layout_ruby, ruby_base_units, spread_ruby_base_cells,
-    EmphasisMark, RubyCell,
+    grow_ruby_bases, layout_emphasis, layout_ruby, ruby_base_units, ruby_rooms,
+    set_ruby_overhang_rooms, spread_ruby_base_cells, EmphasisMark, RubyCell,
 };
 use super::cells::{Fonts, SpanCells, WarichuNote};
 use super::flow::{
@@ -189,11 +189,15 @@ impl ColumnGeometry {
         };
         let max_font_size = spans.iter().map(|s| s.font_size).fold(12.0, f32::max);
 
-        // Ruby reserves its configured-size gutter on the logical annotation
-        // side. In vertical-rl, `over` is right and `under` is left.
+        // Under automatic clearance, ruby reserves its configured-size gutter
+        // on the logical annotation side. In vertical-rl, `over` is right and
+        // `under` is left. `None` keeps the column advance, as horizontal
+        // keeps the line height.
+        let reserves = |span: &&TextSpan| span.annotation_clearance.is_auto();
         let ruby_gutter = |side| {
             spans
                 .iter()
+                .filter(reserves)
                 .filter(|span| span.has_ruby() && span.ruby_side == side)
                 .map(TextSpan::ruby_font_size)
                 .fold(0.0, f32::max)
@@ -201,11 +205,12 @@ impl ColumnGeometry {
         let ruby_over_gutter = ruby_gutter(RubySide::Over);
         // Emphasis takes the over (right) side. Auto-clearance spans with both
         // annotations stack there; under-side ruby stays separate.
-        let emphasis_gutter = if spans.iter().any(|s| !s.text_emphasis.is_none()) {
-            max_font_size * EMPHASIS_FONT_SCALE
-        } else {
-            0.0
-        };
+        let emphasis_gutter = spans
+            .iter()
+            .filter(reserves)
+            .filter(|span| !span.text_emphasis.is_none())
+            .map(|span| span.font_size * EMPHASIS_FONT_SCALE)
+            .fold(0.0, f32::max);
         let stacked = spans
             .iter()
             .any(|s| s.stacks_emphasis_outside_ruby() && !s.text_emphasis.is_none());
@@ -287,6 +292,7 @@ fn build_paragraph_flow<'a>(
         &mut flow,
     );
     keep_transform_expansions_together(&mut flow, transforms, &span_starts);
+    keep_ruby_bases_together(&mut flow, paragraph);
     (flow, span_starts, notes)
 }
 
@@ -382,6 +388,18 @@ fn keep_transform_expansions_together(
         let (previous, current) = (&flow[index - 1].cell, &flow[index].cell);
         flow[index].keep_with_previous =
             previous.span == current.span && source_range(previous) == source_range(current);
+    }
+}
+
+/// A span reading is group ruby: its base moves between columns whole, so
+/// the reading never splits.
+fn keep_ruby_bases_together(flow: &mut [FlowCell], paragraph: &Paragraph) {
+    let spans = paragraph.children();
+    for index in 1..flow.len() {
+        let span = flow[index].cell.span;
+        if flow[index - 1].cell.span == span && spans.get(span).is_some_and(TextSpan::has_ruby) {
+            flow[index].keep_with_previous = true;
+        }
     }
 }
 
@@ -482,6 +500,7 @@ pub fn layout_vertical(
     let mut cells: Vec<VerticalCell> = Vec::new();
     let mut columns: Vec<VerticalColumn> = Vec::new();
     let mut paragraph_columns: Vec<(usize, usize)> = Vec::new();
+    let mut all_ruby_rooms = Vec::new();
     let mut span_utf16_starts: Vec<Vec<usize>> = Vec::new();
 
     for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
@@ -509,12 +528,13 @@ pub fn layout_vertical(
                 &mut runs,
                 &mut paints,
             );
-            let ruby_units = ruby_base_units(paragraph, transforms, &span_starts);
+            let mut ruby_units = ruby_base_units(paragraph, transforms, &span_starts);
 
             apply_inter_script_spacing(&mut flow);
             let classes = flow_classes(&flow, &ruby_spans);
             shed_punctuation_aki(&mut flow, &classes);
             materialize_explicit_pair_spacing(&mut flow, &classes);
+            set_ruby_overhang_rooms(&flow, &mut ruby_units);
             grow_ruby_bases(&mut flow, &ruby_units);
             let mut pair_spacing_em = preferred_pair_spacing(&classes);
             apply_ordered_oikomi(&mut flow, &classes, &mut pair_spacing_em, max_height);
@@ -575,6 +595,7 @@ pub fn layout_vertical(
             cells.push(cell);
         }
         spread_ruby_base_cells(&mut cells[paragraph_cell_start..], &ruby_units, max_height);
+        all_ruby_rooms.extend(ruby_rooms(paragraph_index, &ruby_units));
         span_utf16_starts.push(span_starts);
     }
 
@@ -586,10 +607,11 @@ pub fn layout_vertical(
         column.x = right;
     }
 
-    let (ruby_runs, ruby_cells) = layout_ruby(text_content, &cells, &fonts);
+    let (ruby_runs, ruby_cells) = layout_ruby(text_content, &cells, &fonts, &all_ruby_rooms);
     let (emphasis_runs, emphasis_marks) = layout_emphasis(
         text_content,
         &cells,
+        &runs,
         &span_utf16_starts,
         &span_transforms,
         &fonts,

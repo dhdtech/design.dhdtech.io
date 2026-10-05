@@ -275,12 +275,38 @@
                                        :fill-color "#000000"
                                        :fill-opacity 1}]}]}]})
 
-(deftest foreign-object-text-emits-counted-digits-css
-  (testing "the counted digits variants serialize as CSS `digits <n>`"
+(deftest foreign-object-text-combines-each-digit-run
+  (testing "browsers lack CSS `digits <n>`, so each digit run gets its own `all` span"
     (let [text   (text-shape tcy-digits2-text-content)
           markup (rds/renderToStaticMarkup
                   (mf/element fo-text/text-shape* #js {:shape text :grow-type :fixed}))]
-      (is (str/includes? markup "text-combine-upright:digits 2")))))
+      (is (str/includes? markup "<span style=\"text-combine-upright:all\">31</span>"))
+      (is (not (str/includes? markup "digits"))))))
+
+(deftest generated-code-combines-each-digit-run
+  (testing "generated markup marks digit runs and the CSS combines them"
+    (let [text   (text-shape tcy-digits2-text-content)
+          markup (html/generate-markup (objects text) [text])
+          css    (css/generate-text-css text)]
+      (is (re-find #"<span class=\"tcy\"\s*>31</span>" markup))
+      (is (re-find #"\.tcy \{\s*text-combine-upright: all" css))
+      (is (not (str/includes? css "digits"))))))
+
+(deftest generated-css-keeps-the-writing-mode
+  (testing "code keeps vertical writing whatever renderer is active"
+    (let [css (css/generate-text-css (text-shape ruby-text-content))]
+      (is (str/includes? css "writing-mode: vertical-rl"))
+      (is (str/includes? css "text-orientation: upright")))))
+
+(deftest ruby-text-drops-base-only-styles
+  (testing "the reading does not inherit emphasis marks or font features"
+    (let [content (update-in ruby-text-content [:children 0 :children 0 :children 0]
+                             assoc :text-emphasis "filled-dot" :font-features "palt")
+          markup  (rds/renderToStaticMarkup
+                   (mf/element fo-text/text-shape* #js {:shape (text-shape content) :grow-type :fixed}))
+          rt      (re-find #"<rt[^>]*>" markup)]
+      (is (not (str/includes? rt "text-emphasis")))
+      (is (not (str/includes? rt "font-feature-settings"))))))
 
 (deftest foreign-object-text-emits-font-feature-settings
   (testing "browser/foreignObject render emits palt/vpal as OpenType features"
@@ -341,3 +367,14 @@
           css     (css/generate-text-css (text-shape content))]
       (is (not (str/includes? css "paragraph-0-ruby")))
       (is (not (str/includes? css "paragraph-0-rt"))))))
+
+(deftest generated-css-defines-the-paragraph-line-height-for-annotation-room
+  (testing "auto clearance builds on the paragraph line height, so code keeps the variable"
+    (let [content (-> ruby-text-content
+                      (assoc-in [:children 0 :children 0 :line-height] "2")
+                      (assoc-in [:children 0 :children 0 :children 0 :annotation-clearance] "auto"))
+          css     (css/generate-text-css (text-shape content))]
+      (is (re-find #"--paragraph-line-height:\s*2" css))
+      (is (re-find #"line-height:\s*calc\(var\(--paragraph-line-height" css))
+      (is (not (str/includes? css "--fills")))
+      (is (not (str/includes? css "--font-id"))))))

@@ -330,6 +330,24 @@ pub fn paint_text_vertical(
     true
 }
 
+/// Paint the glyphs of vertical text content with one `paint` (a stroke or
+/// an opaque silhouette) instead of the span fills. Returns false when the
+/// content is not vertical.
+pub fn paint_text_vertical_with(
+    canvas: &Canvas,
+    text_content: &TextContent,
+    vertical_align: VerticalAlign,
+    paint: &Paint,
+) -> bool {
+    if !text_content.is_vertical() {
+        return false;
+    }
+    let bounds = text_content.bounds();
+    let layout = layout_for_box(text_content, bounds.height());
+    paint_glyphs(canvas, &layout, &bounds, vertical_align, paint);
+    true
+}
+
 /// Glyph-outline paths of the layout, in the same order and with the same
 /// paints as the canvas fill pass.
 fn paths_from_layout(

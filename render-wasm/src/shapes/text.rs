@@ -804,19 +804,22 @@ impl TextContent {
         self.bounds = Rect::from_ltrb(p1.x, p1.y, p2.x, p2.y);
     }
 
+    /// Caret position for a selrect-local point. Vertical text wraps its
+    /// columns at the `selrect` height, as painting does; stored bounds can
+    /// be taller than a fixed shape.
     pub fn get_caret_position_from_shape_coords(
         &self,
         point: &Point,
+        selrect: &Rect,
         vertical_align: VerticalAlign,
     ) -> Option<TextPositionWithAffinity> {
-        // Vertical writing: resolve through the vertical pass. The point is
-        // selrect-local; the content block is right-anchored.
+        // Vertical writing: resolve through the vertical pass. The content
+        // block is right-anchored.
         if self.is_vertical() {
-            let bounds = self.bounds();
-            let layout = super::text_vertical::layout_for_box(self, bounds.height());
+            let layout = super::text_vertical::layout_for_box(self, selrect.height());
             let cx = point.x
                 - super::text_vertical::block_axis_offset(
-                    bounds.width(),
+                    selrect.width(),
                     layout.width,
                     vertical_align,
                 );
@@ -904,10 +907,11 @@ impl TextContent {
         point: &Point,
         view_matrix: &Matrix,
         shape_matrix: &Matrix,
+        selrect: &Rect,
         vertical_align: VerticalAlign,
     ) -> Option<TextPositionWithAffinity> {
         let shape_rel_point = Shape::get_relative_point(point, view_matrix, shape_matrix)?;
-        self.get_caret_position_from_shape_coords(&shape_rel_point, vertical_align)
+        self.get_caret_position_from_shape_coords(&shape_rel_point, selrect, vertical_align)
     }
 
     /// Builds the ParagraphBuilders necessary to render
@@ -1001,7 +1005,15 @@ impl TextContent {
             let mut has_text = false;
             let (span_texts, _) = paragraph.layout_span_texts();
             let sheds = super::text_japanese::horizontal_aki_sheds(paragraph, &span_texts);
-            for ((span, text), sheds) in paragraph.children().iter().zip(&span_texts).zip(&sheds) {
+            let ruby_spacing =
+                super::text_japanese::horizontal_ruby_spacing(paragraph, &span_texts);
+            for (((span, text), sheds), extra) in paragraph
+                .children()
+                .iter()
+                .zip(&span_texts)
+                .zip(&sheds)
+                .zip(&ruby_spacing.adjustments)
+            {
                 let text_style = if let Some((layer, image_id)) = opaque_image_layer {
                     let mut style = span.to_style(
                         &self.bounds(),
@@ -1063,7 +1075,7 @@ impl TextContent {
                     has_text = true;
                 }
                 builder.push_style(&text_style);
-                add_horizontal_span(&mut builder, span, text, sheds, &text_style, fonts);
+                add_horizontal_span(&mut builder, span, text, sheds, extra, &text_style, fonts);
             }
             if !has_text {
                 builder.add_text(" ");
@@ -1906,6 +1918,26 @@ impl TextSpan {
         self.warichu && self.text.chars().count() >= 2
     }
 
+    /// Room, in em of the span, that automatic annotation clearance adds to
+    /// the line height: the ruby at its size plus the emphasis marks. `None`
+    /// keeps the set line height, so annotations sit in the line gap.
+    pub fn annotation_room_em(&self) -> f32 {
+        if !self.annotation_clearance.is_auto() {
+            return 0.0;
+        }
+        let ruby = if self.has_ruby() {
+            self.ruby_size.scale()
+        } else {
+            0.0
+        };
+        let emphasis = if self.text_emphasis.is_none() {
+            0.0
+        } else {
+            super::text_japanese::EMPHASIS_FONT_SCALE
+        };
+        ruby + emphasis
+    }
+
     /// Automatic clearance stacks emphasis marks outside an over-side ruby.
     pub fn stacks_emphasis_outside_ruby(&self) -> bool {
         self.annotation_clearance.is_auto() && self.has_ruby() && self.ruby_side == RubySide::Over
@@ -1963,13 +1995,8 @@ impl TextSpan {
             merge_fills(&self.fills, *content_bounds)
         };
 
-        let annotation_layers = if self.annotation_clearance.is_auto() {
-            usize::from(self.has_ruby()) + usize::from(!self.text_emphasis.is_none())
-        } else {
-            0
-        };
         let max_line_height =
-            f32::max(paragraph_line_height, self.line_height) + annotation_layers as f32 * 0.5;
+            f32::max(paragraph_line_height, self.line_height) + self.annotation_room_em();
         style.set_height(max_line_height);
         style.set_height_override(true);
         style.set_foreground_paint(&paint);
@@ -2200,17 +2227,22 @@ pub fn calculate_text_layout_data(
                             direction,
                         }
                     };
-                let placeholder_rects = para_layout.paragraph.get_rects_for_placeholders();
-                let mut placeholder_index = 0usize;
+                // Tabs are placeholders too; this keys warichu boxes by span.
+                let warichu_rects = super::text_japanese::horizontal_warichu_placeholders(
+                    text_para,
+                    &para_layout.paragraph,
+                );
                 for range in &offsets.ranges {
                     if range.warichu {
                         // One strip per sub-line: the top half holds the
                         // first line, the bottom half the second.
-                        if let (Some(textbox), Some(span)) = (
-                            placeholder_rects.get(placeholder_index),
-                            text_para.children().get(range.span),
-                        ) {
-                            let rect = textbox.rect;
+                        let warichu_rect = warichu_rects
+                            .iter()
+                            .find(|(span, _)| *span == range.span)
+                            .map(|(_, rect)| *rect);
+                        if let (Some(rect), Some(span)) =
+                            (warichu_rect, text_para.children().get(range.span))
+                        {
                             let text = span.apply_text_transform();
                             let split = warichu_text_lines(&text).0.encode_utf16().count();
                             let end = range.source_end - range.source_start;
@@ -2222,7 +2254,6 @@ pub fn calculate_text_layout_data(
                             position_data.push(entry(range.span, 0..split, top, ltr));
                             position_data.push(entry(range.span, split..end, bottom, ltr));
                         }
-                        placeholder_index += 1;
                         continue;
                     }
                     let orig_span_start = range.source_start;

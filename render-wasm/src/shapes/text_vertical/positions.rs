@@ -137,12 +137,20 @@ pub fn position_data(
         let mut source_range = cell_source_utf16_range(layout, first);
         let mut bottom = first.top + first.extent;
         let mut j = i + 1;
-        while j < layout.cells.len() {
+        // A tate-chu-yoko composite keeps its own strip, so SVG text can set
+        // it with `text-combine-upright: all` (which SVG applies per element).
+        let own_strip = |cell: &VerticalCell| {
+            matches!(
+                cell.kind,
+                CellKind::Warichu { .. } | CellKind::TateChuYoko { .. }
+            )
+        };
+        while j < layout.cells.len() && !own_strip(first) {
             let next = &layout.cells[j];
             if next.paragraph == first.paragraph
                 && next.span == first.span
                 && next.column == first.column
-                && !matches!(next.kind, CellKind::Warichu { .. })
+                && !own_strip(next)
             {
                 let next_source = cell_source_utf16_range(layout, next);
                 source_range.start = source_range.start.min(next_source.start);
@@ -259,6 +267,34 @@ fn cell_scalar_range(layout: &VerticalLayout, cell: &VerticalCell) -> Option<(us
     ))
 }
 
+/// Flow offset from the cell top of each scalar boundary (0..=`chars`) of a
+/// sideways run, from its glyph positions; `None` for other cells.
+fn rotated_boundaries(
+    layout: &VerticalLayout,
+    cell: &VerticalCell,
+    chars: usize,
+) -> Option<Vec<f32>> {
+    let CellKind::Rotated { run } = cell.kind else {
+        return None;
+    };
+    layout
+        .runs
+        .get(run)?
+        .scalar_flow_offsets(cell.extent, chars)
+}
+
+/// Flow offset from the cell top of the scalar boundary `index` (0..=`chars`).
+fn boundary_offset(
+    layout: &VerticalLayout,
+    cell: &VerticalCell,
+    index: usize,
+    chars: usize,
+) -> f32 {
+    rotated_boundaries(layout, cell, chars)
+        .and_then(|boundaries| boundaries.get(index).copied())
+        .unwrap_or(index as f32 / chars as f32 * cell.extent)
+}
+
 /// Scalar length of a warichu cell's first sub-line. `first_chars` is its
 /// UTF-16 length; the cell holds `chars` scalars from `cell_start`.
 fn warichu_first_line_len(
@@ -323,9 +359,17 @@ pub fn caret_from_point(layout: &VerticalLayout, x: f32, y: f32) -> Option<(usiz
             }
             let offset = match cell.kind {
                 CellKind::Rotated { .. } => {
-                    // Proportional position along the rotated run.
-                    let frac = ((y - cell.top) / cell.extent).clamp(0.0, 1.0);
-                    cell_start + ((frac * chars as f32).round() as usize).min(chars)
+                    // The glyph boundary nearest the point along the run.
+                    let within = y - cell.top;
+                    let nearest = (0..=chars)
+                        .min_by(|a, b| {
+                            let distance = |index: &usize| {
+                                (boundary_offset(layout, cell, *index, chars) - within).abs()
+                            };
+                            distance(a).total_cmp(&distance(b))
+                        })
+                        .unwrap_or(0);
+                    cell_start + nearest
                 }
                 CellKind::TateChuYoko { .. } => {
                     // The digits run left->right inside the composite, so the
@@ -424,13 +468,10 @@ pub fn caret_rect(layout: &VerticalLayout, paragraph: usize, offset: usize) -> O
                     )
                 }
                 _ => {
-                    let frac = (offset - cell_start) as f32 / chars as f32;
-                    Rect::from_xywh(
-                        column.x,
-                        cell.top + frac * cell.extent,
-                        column.base_width,
-                        cell.extent / chars as f32,
-                    )
+                    let index = offset - cell_start;
+                    let top = boundary_offset(layout, cell, index, chars);
+                    let bottom = boundary_offset(layout, cell, index + 1, chars);
+                    Rect::from_xywh(column.x, cell.top + top, column.base_width, bottom - top)
                 }
             }
         };
@@ -481,12 +522,12 @@ pub fn range_rects(
             continue;
         }
         let sel_top = if start > cell_start {
-            cell.top + ((start - cell_start) as f32 / chars as f32) * cell.extent
+            cell.top + boundary_offset(layout, cell, start - cell_start, chars)
         } else {
             cell.top
         };
         let sel_bottom = if end < cell_end {
-            cell.top + ((end - cell_start) as f32 / chars as f32) * cell.extent
+            cell.top + boundary_offset(layout, cell, end - cell_start, chars)
         } else {
             cell.top + cell.extent
         };
@@ -549,6 +590,76 @@ mod tests {
         TextTransform,
     };
     use crate::wasm::text::helpers as text_helpers;
+
+    #[test]
+    fn position_data_gives_each_digit_composite_its_own_strip() {
+        let content = spans_content(
+            vec![TextSpan {
+                text_combine_upright: TextCombineUpright::Digits2,
+                ..make_span("平成31年")
+            }],
+            1000.0,
+        );
+        let layout = layout_content(&content, 1000.0);
+        let strips: Vec<(u32, u32)> = position_data(&layout, &content.bounds(), VerticalAlign::Top)
+            .iter()
+            .filter(|entry| entry.direction == DIRECTION_VERTICAL_RL)
+            .map(|entry| (entry.start_pos, entry.end_pos))
+            .collect();
+        assert_eq!(strips, vec![(0, 2), (2, 4), (4, 5)]);
+    }
+
+    #[test]
+    fn caret_from_shape_coords_wraps_columns_at_the_selrect_height() {
+        let mut resources =
+            crate::render::RenderResources::try_new_headless().expect("headless resources");
+        let _guard = crate::globals::TestRenderResourcesGuard::install(&mut resources);
+        // Stored bounds are taller than the shape, as after measuring a fixed text.
+        let content = make_content(&["あいうえ"], 1000.0);
+        let wide = super::super::layout::layout_for_box(&content, 1000.0);
+        let height = wide.cells[0].extent * 2.0 + 1.0;
+        let selrect = Rect::from_xywh(0.0, 0.0, 200.0, height);
+        let layout = super::super::layout::layout_for_box(&content, selrect.height());
+        let caret = caret_rect(&layout, 0, 2).unwrap();
+        assert_ne!(layout.cells[2].column, layout.cells[0].column);
+        let left = super::super::layout::block_axis_offset(
+            selrect.width(),
+            layout.width,
+            VerticalAlign::Top,
+        );
+        let point = crate::math::Point::new(left + caret.center_x(), caret.top + 1.0);
+
+        let position = content
+            .get_caret_position_from_shape_coords(&point, &selrect, VerticalAlign::Top)
+            .expect("a caret position");
+        assert_eq!((position.paragraph, position.offset), (0, 2));
+    }
+
+    #[test]
+    fn caret_rect_on_a_sideways_run_follows_glyph_positions() {
+        let content = make_content(&["WWWiii"], 1000.0);
+        let layout = layout_content(&content, 1000.0);
+        let cell = &layout.cells[0];
+        let run = &layout.runs[match cell.kind {
+            CellKind::Rotated { run } => run,
+            _ => panic!("expected a sideways run"),
+        }];
+        let boundary = cell.top + run.positions[3].x - run.positions[0].x;
+
+        let caret = caret_rect(&layout, 0, 3).unwrap();
+        assert!(
+            (caret.top - boundary).abs() < 0.01,
+            "caret at {} but the glyph boundary is at {boundary}",
+            caret.top
+        );
+        assert_eq!(
+            caret_from_point(&layout, caret.left + 1.0, boundary + 0.5),
+            Some((0, 3))
+        );
+
+        let selection = range_rects(&layout, 0, 0, 3);
+        assert!((selection[0].bottom - boundary).abs() < 0.01);
+    }
 
     #[test]
     fn caret_from_point_lands_inside_tcy_composite() {
@@ -937,7 +1048,9 @@ mod tests {
 
     #[test]
     fn ruby_selection_geometry_excludes_gutter() {
-        let content = ruby_content("AB", "ab", 400.0);
+        let mut content = ruby_content("AB", "ab", 400.0);
+        content.paragraphs_mut()[0].children_mut()[0].annotation_clearance =
+            crate::shapes::AnnotationClearance::Auto;
         let layout = layout_content(&content, 400.0);
         let base_width = layout.columns[0].base_width;
         assert!(base_width < layout.columns[0].width);

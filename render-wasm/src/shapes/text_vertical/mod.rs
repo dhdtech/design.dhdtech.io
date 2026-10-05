@@ -41,11 +41,11 @@ mod shaping;
 #[cfg(test)]
 mod test_support;
 
-pub(crate) use annotations::distribute_ruby_tops;
+pub(crate) use annotations::{distribute_ruby_tops, ruby_overhang_room};
 pub use layout::{block_axis_offset, layout_for_box, measure_content, VerticalLayout};
 pub use paint::{
     paint_drop_shadow, paint_grid, paint_layout, paint_stroke, paint_text_vertical,
-    vertical_text_paths,
+    paint_text_vertical_with, vertical_text_paths,
 };
 pub use positions::{
     caret_from_point, caret_rect, intersects, position_data, range_rects, DIRECTION_EMPHASIS_MARK,

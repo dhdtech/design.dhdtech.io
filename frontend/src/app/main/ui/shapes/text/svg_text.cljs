@@ -51,6 +51,17 @@
          :fill fill}
     data))
 
+(defn- strip-text-combine-upright
+  "CSS text-combine-upright of a strip. SVG applies it to whole `text`
+   elements only, so the renderer gives each combined digit run of a
+   `digits` span its own strip, which takes `all`."
+  [data]
+  (let [value (:text-combine-upright data)]
+    (if-let [segments (jl/digit-combine-segments (str (:text data)) value)]
+      (when (and (= 1 (count segments)) (second (first segments)))
+        "all")
+      (sts/css-text-combine-upright value))))
+
 (defn- strip-text-props
   "Props of the `text` element drawing a position-data strip's base text."
   [shape data index fill browser-props]
@@ -60,8 +71,7 @@
                      :fontWeight (:font-weight data)
                      :textTransform (:text-transform data)
                      :textDecoration (:text-decoration data)
-                     :textCombineUpright (sts/css-text-combine-upright
-                                          (:text-combine-upright data))
+                     :textCombineUpright (strip-text-combine-upright data)
                      :letterSpacing (:letter-spacing data)
                      :fontStyle (:font-style data)
                      :direction (:direction data)

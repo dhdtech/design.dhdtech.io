@@ -5,6 +5,7 @@
 
 use skia_safe::{self as skia, Font};
 
+use crate::shapes::japanese::{classify, JapaneseClass};
 use crate::shapes::text_japanese::{emphasis_char_allowed, EMPHASIS_FONT_SCALE};
 use crate::shapes::{
     AppliedTextTransform, FontFeatures, Paragraph, RubyAlign, RubyOverhang, RubySide, TextContent,
@@ -44,12 +45,14 @@ pub struct RubyCell {
 }
 
 /// One emphasis mark (圏点 / bouten) beside a base character: the
-/// single-glyph `run`, centred on the base cell's flow extent in the column's
-/// right-side gutter.
+/// single-glyph `run`, centred on the character along the flow, in the
+/// column's right-side gutter.
 pub struct EmphasisMark {
     pub run: usize,
     /// Index of the annotated base cell in `VerticalLayout::cells`.
     pub cell: usize,
+    /// Flow offset of the mark centre from the cell top.
+    pub flow_center: f32,
     pub font_size: f32,
     /// Cross-axis offset past a stacked ruby layer.
     pub outside_offset: f32,
@@ -77,21 +80,49 @@ fn proportional_range(
     start.min(item_count)..end.min(item_count)
 }
 
+/// Room a long reading may overhang one neighbouring character (JLREQ
+/// §3.3.8): up to one ruby character, and half the neighbour, over kana
+/// without ruby of their own. Kanji, punctuation, another ruby base and a
+/// line edge (`None`) get no overhang, nor does any neighbour under
+/// `RubyOverhang::None`.
+pub(crate) fn ruby_overhang_room(
+    policy: RubyOverhang,
+    neighbour: Option<char>,
+    neighbour_has_ruby: bool,
+    neighbour_extent: f32,
+    ruby_font_size: f32,
+) -> f32 {
+    let kana = neighbour.is_some_and(|ch| {
+        matches!(
+            classify(ch),
+            JapaneseClass::Hiragana
+                | JapaneseClass::Katakana
+                | JapaneseClass::SmallKana
+                | JapaneseClass::ProlongedSoundMark
+        )
+    });
+    if policy == RubyOverhang::Auto && kana && !neighbour_has_ruby {
+        ruby_font_size.min(neighbour_extent / 2.0).max(0.0)
+    } else {
+        0.0
+    }
+}
+
 /// Flow-axis top of each of `count` ruby glyphs of `advance` along the base
 /// segment `[seg_top, seg_top + seg_extent)`. Per jlreq:
 ///
 /// - Ruby that fits the base is placed by `align`; `SpaceAround` is even
 ///   distribution (均等割り付け): equal slots, each glyph centred in its slot.
-/// - Longer ruby packs at its own advance and overhangs the base start
-///   (オーバーハング) by half the overflow, capped at one ruby em so it cannot
-///   cover its neighbours. `RubyOverhang::None` starts it at the base top.
+/// - Longer ruby packs at its own advance and overhangs the base, centred
+///   where the `room` (before, after) of its neighbours allows. Layout grows
+///   the base so the overflow fits that room.
 pub(crate) fn distribute_ruby_tops(
     seg_top: f32,
     seg_extent: f32,
     count: usize,
     advance: f32,
     align: RubyAlign,
-    overhang_policy: RubyOverhang,
+    room: (f32, f32),
 ) -> Vec<f32> {
     if count == 0 {
         return Vec::new();
@@ -120,12 +151,11 @@ pub(crate) fn distribute_ruby_tops(
         }
     } else {
         let overflow = line - seg_extent;
-        let overhang = if overhang_policy == RubyOverhang::Auto {
-            (overflow / 2.0).min(advance)
-        } else {
-            0.0
-        };
-        let start = seg_top - overhang;
+        let (before, after) = room;
+        let overhang = (overflow / 2.0)
+            .min(before)
+            .max((overflow - after).min(before));
+        let start = seg_top - overhang.max(0.0);
         (0..count).map(|i| start + advance * i as f32).collect()
     }
 }
@@ -146,22 +176,6 @@ pub(super) fn ruby_strip_x(
     }
 }
 
-/// True when the UTF-16 range contains an emphasis-eligible character.
-fn utf16_range_allows_emphasis(text: &str, start: usize, end: usize) -> bool {
-    let mut offset = 0;
-    for c in text.chars() {
-        if offset >= end {
-            break;
-        }
-        let len = c.len_utf16();
-        if offset + len > start && emphasis_char_allowed(c) {
-            return true;
-        }
-        offset += len;
-    }
-    false
-}
-
 /// The base text of one ruby span: the transformed UTF-16 range it covers in
 /// its paragraph and the length of its reading.
 #[derive(Debug, Clone, Copy)]
@@ -172,6 +186,8 @@ pub(super) struct RubyBaseUnit {
     ruby_len: usize,
     ruby_font_size: f32,
     overhang: RubyOverhang,
+    /// Overhang room over the characters before and after the base.
+    room: (f32, f32),
 }
 
 impl RubyBaseUnit {
@@ -204,14 +220,59 @@ pub(super) fn ruby_base_units(
             ruby_len: span.ruby_text().chars().count(),
             ruby_font_size: span.ruby_font_size(),
             overhang: span.ruby_overhang,
+            room: (0.0, 0.0),
         })
         .collect()
 }
 
+/// Overhang room of every unit over its flow neighbours, before placement.
+/// Placement later removes the room at a column edge.
+pub(super) fn set_ruby_overhang_rooms(flow: &[FlowCell], ruby_units: &mut [RubyBaseUnit]) {
+    let has_ruby = |index: usize, units: &[RubyBaseUnit]| {
+        units.iter().any(|unit| unit.annotates(&flow[index].cell))
+    };
+    let snapshot = ruby_units.to_vec();
+    for unit in ruby_units.iter_mut() {
+        let indices: Vec<usize> = (0..flow.len())
+            .filter(|index| unit.annotates(&flow[*index].cell))
+            .collect();
+        let (Some(first), Some(last)) = (indices.first(), indices.last()) else {
+            continue;
+        };
+        let room = |index: Option<usize>| {
+            index.map_or(0.0, |index| {
+                ruby_overhang_room(
+                    unit.overhang,
+                    flow[index].ch,
+                    has_ruby(index, &snapshot),
+                    flow[index].cell.extent,
+                    unit.ruby_font_size,
+                )
+            })
+        };
+        let before = first.checked_sub(1);
+        let after = Some(last + 1).filter(|index| *index < flow.len());
+        unit.room = (room(before), room(after));
+    }
+}
+
+/// Overhang room (before, after) of each ruby span, keyed by (paragraph,
+/// span).
+pub(super) type RubyRooms = Vec<((usize, usize), (f32, f32))>;
+
+/// Overhang room of every ruby span of a paragraph, for `layout_ruby`.
+pub(super) fn ruby_rooms(paragraph: usize, ruby_units: &[RubyBaseUnit]) -> RubyRooms {
+    ruby_units
+        .iter()
+        .map(|unit| ((paragraph, unit.span), unit.room))
+        .collect()
+}
+
 /// Grow the flow extent of base cells under long ruby before column planning,
-/// so wrapping makes room (forced spreading). The growth goes into gaps
-/// between characters, so the last cell keeps its extent. A single-character
-/// base grows only when overhang is prohibited; otherwise the ruby overhangs.
+/// so wrapping makes room (forced spreading). Only the part of the reading
+/// that its overhang room cannot take grows the base. The growth goes into
+/// gaps between characters, so the last cell keeps its extent; a
+/// single-character base grows around its centred glyph.
 pub(super) fn grow_ruby_bases(flow: &mut [FlowCell], ruby_units: &[RubyBaseUnit]) {
     for unit in ruby_units {
         let indices: Vec<usize> = (0..flow.len())
@@ -221,14 +282,15 @@ pub(super) fn grow_ruby_bases(flow: &mut [FlowCell], ruby_units: &[RubyBaseUnit]
             continue;
         };
         let base_total: f32 = indices.iter().map(|index| flow[*index].cell.extent).sum();
-        let deficit = unit.ruby_line(unit.ruby_len) - base_total;
+        let deficit = unit.ruby_line(unit.ruby_len) - base_total - unit.room.0 - unit.room.1;
         if deficit <= 0.0 {
             continue;
         }
         if growing.is_empty() {
-            if unit.overhang == RubyOverhang::None {
-                flow[*last].cell.extent += deficit;
-            }
+            flow[*last].cell.extent += deficit;
+            flow[*last].cell.glyph_flow_shift += deficit / 2.0;
+            flow[*last].cell.ink_top += deficit / 2.0;
+            flow[*last].cell.ink_bottom += deficit / 2.0;
             continue;
         }
         let gap = deficit / growing.len() as f32;
@@ -275,7 +337,7 @@ pub(super) fn spread_ruby_base_cells(
 
             let ruby_range =
                 proportional_range(unit.ruby_len, group_start, group.len(), total_base_count);
-            let ruby_line = unit.ruby_line(ruby_range.len());
+            let ruby_line = unit.ruby_line(ruby_range.len()) - unit.room.0 - unit.room.1;
             let first = group[0];
             let last = group[group.len() - 1];
             let base_top = cells[first].top;
@@ -376,13 +438,40 @@ fn ruby_glyphs(
     glyphs
 }
 
+/// Overhang room of a base segment, without the sides that touch a column
+/// edge: ruby never sticks out past the first or last character.
+fn room_inside_column(
+    cells: &[VerticalCell],
+    column: usize,
+    base_top: f32,
+    base_bottom: f32,
+    room: (f32, f32),
+) -> (f32, f32) {
+    let in_column = |cell: &&VerticalCell| cell.column == column;
+    let has_before = cells
+        .iter()
+        .filter(in_column)
+        .any(|cell| cell.top + cell.extent <= base_top + 0.01);
+    let has_after = cells
+        .iter()
+        .filter(in_column)
+        .any(|cell| cell.top >= base_bottom - 0.01);
+    (
+        if has_before { room.0 } else { 0.0 },
+        if has_after { room.1 } else { 0.0 },
+    )
+}
+
 /// Ruby (furigana) placement. Runs after column placement, since ruby follows
-/// its base's final column and flow extent. A reading whose base wraps is
-/// split across columns in proportion to their base characters.
+/// its base's final column and flow extent. A base taller than its column
+/// stays in it, so a reading only splits across columns in proportion to
+/// the base characters when the base was split by a forced fallback.
+/// `rooms` holds the overhang room of each (paragraph, span).
 pub(super) fn layout_ruby(
     text_content: &TextContent,
     cells: &[VerticalCell],
     fonts: &Fonts,
+    rooms: &RubyRooms,
 ) -> (Vec<ShapedRun>, Vec<RubyCell>) {
     let mut ruby_runs: Vec<ShapedRun> = Vec::new();
     let mut ruby_cells: Vec<RubyCell> = Vec::new();
@@ -436,13 +525,18 @@ pub(super) fn layout_ruby(
                 }
                 let top = base_segments[0].0;
                 let (last_top, last_extent) = base_segments[base_segments.len() - 1];
+                let room = rooms
+                    .iter()
+                    .find(|(key, _)| *key == (paragraph_index, span_index))
+                    .map_or((0.0, 0.0), |(_, room)| *room);
+                let room = room_inside_column(cells, column, top, last_top + last_extent, room);
                 let glyph_tops = distribute_ruby_tops(
                     top,
                     (last_top + last_extent - top).max(0.0),
                     column_glyphs.len(),
                     ruby_font_size,
                     span.ruby_align,
-                    span.ruby_overhang,
+                    room,
                 );
                 ruby_cells.push(RubyCell {
                     glyphs: column_glyphs,
@@ -462,12 +556,67 @@ pub(super) fn layout_ruby(
     (ruby_runs, ruby_cells)
 }
 
-/// Emphasis marks (圏点 / bouten): one mark per upright base cell of each
-/// span with `text_emphasis`, shaped once per span. Whitespace and Japanese
-/// punctuation get no mark, as in CSS `text-emphasis`.
+/// Flow centres (from the cell top) of the emphasis marks of one base cell:
+/// one per eligible character of a sideways run, one for a tate-chu-yoko
+/// composite and one centred on the glyph ink of an upright character.
+/// `text` is the cell's slice of its span's transformed text.
+fn emphasis_flow_centers(cell: &VerticalCell, text: &str, runs: &[ShapedRun]) -> Vec<f32> {
+    let ink_center = || {
+        if cell.ink_bottom > cell.ink_top {
+            (cell.ink_top + cell.ink_bottom) / 2.0
+        } else {
+            cell.extent / 2.0
+        }
+    };
+    match cell.kind {
+        CellKind::Upright { .. }
+        | CellKind::SyntheticRotated { .. }
+        | CellKind::TateChuYoko { .. } => {
+            if text.chars().any(emphasis_char_allowed) {
+                vec![ink_center()]
+            } else {
+                Vec::new()
+            }
+        }
+        CellKind::Rotated { run } => {
+            let chars: Vec<char> = text.chars().collect();
+            let Some(offsets) = runs
+                .get(run)
+                .and_then(|run| run.scalar_flow_offsets(cell.extent, chars.len()))
+            else {
+                return Vec::new();
+            };
+            chars
+                .iter()
+                .enumerate()
+                .filter(|(_, ch)| emphasis_char_allowed(**ch))
+                .map(|(index, _)| (offsets[index] + offsets[index + 1]) / 2.0)
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The characters of the UTF-16 range `start..end` of `text`.
+fn utf16_slice(text: &str, start: usize, end: usize) -> String {
+    let mut offset = 0;
+    text.chars()
+        .filter(|ch| {
+            let inside = offset >= start && offset < end;
+            offset += ch.len_utf16();
+            inside
+        })
+        .collect()
+}
+
+/// Emphasis marks (圏点 / bouten) of each span with `text_emphasis`, shaped
+/// once per span: one per upright character, per letter of a sideways run
+/// and per tate-chu-yoko composite. Whitespace and Japanese punctuation get
+/// no mark, as in CSS `text-emphasis`.
 pub(super) fn layout_emphasis(
     text_content: &TextContent,
     cells: &[VerticalCell],
+    runs: &[ShapedRun],
     span_utf16_starts: &[Vec<usize>],
     span_transforms: &[Vec<AppliedTextTransform>],
     fonts: &Fonts,
@@ -510,26 +659,19 @@ pub(super) fn layout_emphasis(
             // Cell offsets index the span's transformed text.
             let span_text = &span_transforms[paragraph_index][span_index].text;
             for (cell_index, cell) in cells.iter().enumerate() {
-                if cell.paragraph != paragraph_index
-                    || cell.span != span_index
-                    || !matches!(
-                        cell.kind,
-                        CellKind::Upright { .. } | CellKind::SyntheticRotated { .. }
-                    )
-                    || !utf16_range_allows_emphasis(
-                        span_text,
-                        cell.start - span_start,
-                        cell.end - span_start,
-                    )
-                {
+                if cell.paragraph != paragraph_index || cell.span != span_index {
                     continue;
                 }
-                emphasis_marks.push(EmphasisMark {
-                    run: run_index,
-                    cell: cell_index,
-                    font_size: mark_font_size,
-                    outside_offset: span.emphasis_ruby_offset(),
-                });
+                let text = utf16_slice(span_text, cell.start - span_start, cell.end - span_start);
+                for flow_center in emphasis_flow_centers(cell, &text, runs) {
+                    emphasis_marks.push(EmphasisMark {
+                        run: run_index,
+                        cell: cell_index,
+                        flow_center,
+                        font_size: mark_font_size,
+                        outside_offset: span.emphasis_ruby_offset(),
+                    });
+                }
             }
         }
     }
@@ -537,7 +679,7 @@ pub(super) fn layout_emphasis(
 }
 
 /// Centre of an emphasis mark, relative to the layout's content origin: in
-/// its column's gutter past any stacked ruby, at the middle of its base cell.
+/// its column's gutter past any stacked ruby, at its character's centre.
 pub(super) fn emphasis_mark_center(layout: &VerticalLayout, mark: &EmphasisMark) -> (f32, f32) {
     let cell = &layout.cells[mark.cell];
     let base_font_size = mark.font_size / EMPHASIS_FONT_SCALE;
@@ -545,7 +687,7 @@ pub(super) fn emphasis_mark_center(layout: &VerticalLayout, mark: &EmphasisMark)
         + base_font_size / 2.0
         + mark.outside_offset
         + mark.font_size / 2.0;
-    (x, cell.top + cell.extent / 2.0)
+    (x, cell.top + mark.flow_center)
 }
 
 #[cfg(test)]
@@ -584,7 +726,9 @@ mod tests {
 
     #[test]
     fn emphasis_span_reserves_gutter_and_emits_one_mark_per_upright_cell() {
-        let content = emphasis_content("AB", TextEmphasis::FilledDot);
+        let mut content = emphasis_content("AB", TextEmphasis::FilledDot);
+        content.paragraphs_mut()[0].children_mut()[0].annotation_clearance =
+            AnnotationClearance::Auto;
         let layout = layout_content(&content, 400.0);
         let upright = layout
             .cells
@@ -668,7 +812,9 @@ mod tests {
 
     #[test]
     fn ruby_span_reserves_gutter_and_emits_ruby_cells() {
-        let content = ruby_content("AB", "ab", 400.0);
+        let mut content = ruby_content("AB", "ab", 400.0);
+        content.paragraphs_mut()[0].children_mut()[0].annotation_clearance =
+            AnnotationClearance::Auto;
         let layout = layout_content(&content, 400.0);
         assert!(
             !layout.ruby_cells.is_empty(),
@@ -697,6 +843,7 @@ mod tests {
         let span = &mut content.paragraphs_mut()[0].children_mut()[0];
         span.ruby_size = RubySize::Quarter;
         span.ruby_side = RubySide::Under;
+        span.annotation_clearance = AnnotationClearance::Auto;
 
         let layout = layout_content(&content, 400.0);
         let column = &layout.columns[0];
@@ -710,19 +857,18 @@ mod tests {
 
     #[test]
     fn auto_clearance_stacks_ruby_and_emphasis_gutters() {
-        let mut legacy_content = ruby_content("漢字", "かんじ", 400.0);
-        legacy_content.paragraphs_mut()[0].children_mut()[0].text_emphasis =
-            TextEmphasis::FilledDot;
-        let legacy = layout_content(&legacy_content, 400.0);
+        let mut none_content = ruby_content("漢字", "かんじ", 400.0);
+        none_content.paragraphs_mut()[0].children_mut()[0].text_emphasis = TextEmphasis::FilledDot;
+        let none = layout_content(&none_content, 400.0);
 
-        let mut auto_content = legacy_content.clone();
+        let mut auto_content = none_content.clone();
         auto_content.paragraphs_mut()[0].children_mut()[0].annotation_clearance =
             AnnotationClearance::Auto;
         let auto = layout_content(&auto_content, 400.0);
 
-        let legacy_gutter = legacy.columns[0].width - legacy.columns[0].base_width;
+        let none_gutter = none.columns[0].width - none.columns[0].base_width;
         let auto_gutter = auto.columns[0].width - auto.columns[0].base_width;
-        assert!((legacy_gutter - 10.0).abs() < 0.001);
+        assert!(none_gutter.abs() < 0.001, "none keeps the column advance");
         assert!((auto_gutter - 20.0).abs() < 0.001);
         assert!(auto.emphasis_marks[0].outside_offset > 0.0);
     }
@@ -807,14 +953,7 @@ mod tests {
     fn ruby_shorter_than_base_distributes_evenly() {
         // A ruby line of 2 x 50 equals the base extent (100): one glyph per
         // slot, with no offset.
-        let tops = distribute_ruby_tops(
-            0.0,
-            100.0,
-            2,
-            50.0,
-            RubyAlign::SpaceAround,
-            RubyOverhang::Auto,
-        );
+        let tops = distribute_ruby_tops(0.0, 100.0, 2, 50.0, RubyAlign::SpaceAround, (50.0, 50.0));
         assert_eq!(tops.len(), 2);
         assert!(
             (tops[0] - 0.0).abs() < 0.001,
@@ -827,14 +966,8 @@ mod tests {
 
         // A wide base (extent 200) spreads 2 glyphs of advance 50 into slots
         // of 100.
-        let spread = distribute_ruby_tops(
-            0.0,
-            200.0,
-            2,
-            50.0,
-            RubyAlign::SpaceAround,
-            RubyOverhang::Auto,
-        );
+        let spread =
+            distribute_ruby_tops(0.0, 200.0, 2, 50.0, RubyAlign::SpaceAround, (50.0, 50.0));
         assert!(
             (spread[0] - 25.0).abs() < 0.001,
             "ruby glyph centred in its slot"
@@ -849,14 +982,7 @@ mod tests {
     fn ruby_longer_than_base_overhangs_symmetrically() {
         // A ruby line of 80 over a 40 base centres on the base, overhanging
         // each end by 20 (the one-em cap).
-        let tops = distribute_ruby_tops(
-            0.0,
-            40.0,
-            4,
-            20.0,
-            RubyAlign::SpaceAround,
-            RubyOverhang::Auto,
-        );
+        let tops = distribute_ruby_tops(0.0, 40.0, 4, 20.0, RubyAlign::SpaceAround, (50.0, 50.0));
         assert_eq!(tops.len(), 4);
         assert!(tops[0] < 0.0, "long ruby overhangs above the base top");
         let block_center = (tops[0] + tops[3] + 20.0) / 2.0;
@@ -869,43 +995,27 @@ mod tests {
     #[test]
     fn ruby_alignment_modes_control_short_annotation_distribution() {
         assert_eq!(
-            distribute_ruby_tops(
-                0.0,
-                20.0,
-                2,
-                4.0,
-                RubyAlign::SpaceAround,
-                RubyOverhang::Auto,
-            ),
+            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::SpaceAround, (4.0, 4.0),),
             vec![3.0, 13.0]
         );
         assert_eq!(
-            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::Center, RubyOverhang::Auto,),
+            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::Center, (4.0, 4.0)),
             vec![6.0, 10.0]
         );
         assert_eq!(
-            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::Start, RubyOverhang::Auto,),
+            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::Start, (4.0, 4.0)),
             vec![0.0, 4.0]
         );
         assert_eq!(
-            distribute_ruby_tops(
-                0.0,
-                20.0,
-                2,
-                4.0,
-                RubyAlign::SpaceBetween,
-                RubyOverhang::Auto,
-            ),
+            distribute_ruby_tops(0.0, 20.0, 2, 4.0, RubyAlign::SpaceBetween, (4.0, 4.0),),
             vec![0.0, 16.0]
         );
     }
 
     #[test]
     fn ruby_overhang_none_keeps_long_annotation_at_base_start() {
-        let automatic =
-            distribute_ruby_tops(0.0, 10.0, 4, 4.0, RubyAlign::Center, RubyOverhang::Auto);
-        let constrained =
-            distribute_ruby_tops(0.0, 10.0, 4, 4.0, RubyAlign::Center, RubyOverhang::None);
+        let automatic = distribute_ruby_tops(0.0, 10.0, 4, 4.0, RubyAlign::Center, (4.0, 4.0));
+        let constrained = distribute_ruby_tops(0.0, 10.0, 4, 4.0, RubyAlign::Center, (0.0, 0.0));
 
         assert_eq!(automatic, vec![-3.0, 1.0, 5.0, 9.0]);
         assert_eq!(constrained, vec![0.0, 4.0, 8.0, 12.0]);
@@ -1000,31 +1110,188 @@ mod tests {
     }
 
     #[test]
-    fn ruby_base_and_reading_wrap_across_columns() {
+    fn emphasis_marks_sideways_letters_and_tcy() {
+        let content = spans_content(
+            vec![
+                TextSpan {
+                    text_emphasis: TextEmphasis::FilledDot,
+                    ..make_span("かabc")
+                },
+                TextSpan {
+                    text_emphasis: TextEmphasis::FilledDot,
+                    text_combine_upright: crate::shapes::TextCombineUpright::All,
+                    ..make_span("12")
+                },
+            ],
+            400.0,
+        );
+        let layout = layout_with(&provider_with_fallback(VMTX_TEST_FONT, TEST_FONT), &content);
+        assert_eq!(
+            layout.emphasis_marks.len(),
+            5,
+            "か, a, b, c and the TCY composite each get one mark"
+        );
+    }
+
+    #[test]
+    fn emphasis_mark_centres_on_the_glyph_not_the_spacing() {
+        let content = spans_content(
+            vec![TextSpan {
+                text_emphasis: TextEmphasis::FilledDot,
+                letter_spacing: 10.0,
+                ..make_span("かき")
+            }],
+            400.0,
+        );
+        let layout = layout_with(&provider(VMTX_TEST_FONT), &content);
+        for mark in &layout.emphasis_marks {
+            let cell = &layout.cells[mark.cell];
+            let ink_centre = cell.top + (cell.ink_top + cell.ink_bottom) / 2.0;
+            let (_, centre) = emphasis_mark_center(&layout, mark);
+            assert!(
+                (centre - ink_centre).abs() < 0.01,
+                "mark at {centre}, glyph ink centred at {ink_centre}"
+            );
+        }
+    }
+
+    fn neighbour_ruby_content(overhang: RubyOverhang) -> TextContent {
+        spans_content(
+            vec![
+                make_span("か"),
+                TextSpan {
+                    ruby: "かんじかんじ".to_string(),
+                    ruby_overhang: overhang,
+                    ..make_span("漢")
+                },
+                TextSpan {
+                    ruby: "じ".to_string(),
+                    ..make_span("字")
+                },
+                make_span("か"),
+            ],
+            1000.0,
+        )
+    }
+
+    fn ruby_of_span(layout: &VerticalLayout, span: usize) -> &RubyCell {
+        layout
+            .ruby_cells
+            .iter()
+            .find(|ruby| ruby.span == span)
+            .expect("ruby cell")
+    }
+
+    #[test]
+    fn long_reading_never_covers_the_next_ruby_base() {
+        let layout = layout_with(
+            &provider(VMTX_TEST_FONT),
+            &neighbour_ruby_content(RubyOverhang::Auto),
+        );
+        let ruby = ruby_of_span(&layout, 1);
+        let next_base = layout.cells.iter().find(|cell| cell.span == 2).unwrap();
+        let ruby_bottom = ruby.glyph_tops.last().unwrap() + ruby.font_size;
+        assert!(
+            ruby_bottom <= next_base.top + 0.01,
+            "reading ends at {ruby_bottom}, the next ruby base starts at {}",
+            next_base.top
+        );
+    }
+
+    #[test]
+    fn long_reading_overhangs_kana_by_at_most_one_ruby_character() {
+        let layout = layout_with(
+            &provider(VMTX_TEST_FONT),
+            &neighbour_ruby_content(RubyOverhang::Auto),
+        );
+        let ruby = ruby_of_span(&layout, 1);
+        let base = layout.cells.iter().find(|cell| cell.span == 1).unwrap();
+        assert!(ruby.glyph_tops[0] >= base.top - ruby.font_size - 0.01);
+    }
+
+    #[test]
+    fn long_reading_without_overhang_grows_a_single_base() {
+        let layout = layout_with(
+            &provider(VMTX_TEST_FONT),
+            &neighbour_ruby_content(RubyOverhang::None),
+        );
+        let ruby = ruby_of_span(&layout, 1);
+        let base = layout.cells.iter().find(|cell| cell.span == 1).unwrap();
+        assert!(ruby.glyph_tops[0] >= base.top - 0.01);
+        assert!(ruby.glyph_tops.last().unwrap() + ruby.font_size <= base.top + base.extent + 0.01);
+    }
+
+    #[test]
+    fn ruby_overhang_room_allows_only_kana_without_ruby() {
+        assert_eq!(
+            ruby_overhang_room(RubyOverhang::Auto, Some('か'), false, 20.0, 10.0),
+            10.0
+        );
+        assert_eq!(
+            ruby_overhang_room(RubyOverhang::Auto, Some('か'), false, 12.0, 10.0),
+            6.0
+        );
+        assert_eq!(
+            ruby_overhang_room(RubyOverhang::Auto, Some('漢'), false, 20.0, 10.0),
+            0.0
+        );
+        assert_eq!(
+            ruby_overhang_room(RubyOverhang::Auto, Some('か'), true, 20.0, 10.0),
+            0.0
+        );
+        assert_eq!(
+            ruby_overhang_room(RubyOverhang::Auto, None, false, 20.0, 10.0),
+            0.0
+        );
+        assert_eq!(
+            ruby_overhang_room(RubyOverhang::None, Some('か'), false, 20.0, 10.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn ruby_base_moves_to_the_next_column_whole() {
+        let content = |height: f32| {
+            spans_content(
+                vec![
+                    make_span("あい"),
+                    TextSpan {
+                        ruby: "にほん".to_string(),
+                        ..make_span("日本")
+                    },
+                ],
+                height,
+            )
+        };
+        let wide = layout_content(&content(1000.0), 1000.0);
+        // Room for あい and the first base character only.
+        let height = wide.cells[..3].iter().map(|cell| cell.extent).sum::<f32>() + 0.5;
+        let layout = layout_content(&content(height), height);
+        let base_columns: Vec<usize> = layout
+            .cells
+            .iter()
+            .filter(|cell| cell.span == 1)
+            .map(|cell| cell.column)
+            .collect();
+        assert_eq!(base_columns, vec![1, 1], "the ruby base is one group");
+        let ruby_columns: std::collections::BTreeSet<usize> =
+            layout.ruby_cells.iter().map(|r| r.column).collect();
+        assert_eq!(ruby_columns.into_iter().collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn ruby_base_longer_than_a_column_keeps_its_reading_whole() {
         let content = ruby_content("日本語文", "にほんごぶん", 40.0);
         let layout = layout_content(&content, 40.0);
 
         let base_columns: std::collections::BTreeSet<usize> =
             layout.cells.iter().map(|c| c.column).collect();
-        assert_eq!(base_columns.len(), 2, "the ruby base must wrap normally");
-
-        let ruby_columns: std::collections::BTreeSet<usize> =
-            layout.ruby_cells.iter().map(|r| r.column).collect();
-        assert_eq!(ruby_columns, base_columns);
-        assert!(!layout.ruby_cells.is_empty());
+        assert_eq!(base_columns.len(), 1, "the ruby base never wraps");
+        assert_eq!(layout.ruby_cells.len(), 1, "the reading stays in one piece");
         let placed: usize = layout.ruby_cells.iter().map(|r| r.glyphs.len()).sum();
         assert_eq!(
             placed,
-            layout.ruby_runs.iter().map(|run| run.glyphs.len()).sum(),
-            "the reading is partitioned across columns without duplication or loss"
-        );
-        assert!(
-            layout
-                .ruby_cells
-                .windows(2)
-                .all(|pair| pair[0].glyphs.last().unwrap().utf16_end
-                    <= pair[1].glyphs.first().unwrap().utf16_start),
-            "ruby source ranges remain monotonic across the column break"
+            layout.ruby_runs.iter().map(|run| run.glyphs.len()).sum()
         );
     }
 }

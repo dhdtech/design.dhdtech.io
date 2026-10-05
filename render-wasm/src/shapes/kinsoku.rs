@@ -18,10 +18,13 @@ pub const WORD_JOINER: char = '\u{2060}';
 pub const JAPANESE_WESTERN_SPACE: char = '\u{2005}';
 /// Unicode THREE-PER-EM SPACE, used for Western word spaces.
 pub const WESTERN_WORD_SPACE: char = '\u{2004}';
+/// Unicode IDEOGRAPHIC SPACE, the one-em space after a sentence-ending
+/// question or exclamation mark.
+pub const IDEOGRAPHIC_SPACE: char = '\u{3000}';
 /// Joins emoji into one grapheme cluster.
 const ZERO_WIDTH_JOINER: char = '\u{200D}';
 
-use super::japanese::{classify, extends_grapheme, pair_rule};
+use super::japanese::{classify, extends_grapheme, keeps_together, pair_rule, JapaneseClass};
 
 pub fn forbidden_at_line_start(c: char) -> bool {
     classify(c).forbids_line_start()
@@ -103,20 +106,25 @@ pub fn apply_to_span_texts_with_ruby_breaks(
                     .and_then(Option::as_ref)
                     .is_some_and(|breaks| !breaks.contains(&local_utf16));
             let forbid_break = ruby_forbids_break
-                || match prev {
-                    Some(p) => pair_rule(classify(p), classify(c)).suppress_break_with_joiner,
-                    None => false,
-                };
+                || prev.is_some_and(|p| {
+                    pair_rule(classify(p), classify(c)).suppress_break_with_joiner
+                        || keeps_together(p, c)
+                });
+            let mut insert = |ch: char| {
+                shifted_text.push(ch);
+                inserted.push(shifted_pos);
+                shifted_pos += 1;
+                changed = true;
+            };
+            if prev.is_some_and(|p| takes_em_space_after(p, c)) {
+                insert(IDEOGRAPHIC_SPACE);
+            }
+            if prev.is_some_and(|p| is_japanese_western_boundary(p, c)) {
+                insert(JAPANESE_WESTERN_SPACE);
+            }
+            // After an inserted space, the joiner keeps the break blocked.
             if forbid_break {
-                shifted_text.push(WORD_JOINER);
-                inserted.push(shifted_pos);
-                shifted_pos += 1;
-                changed = true;
-            } else if prev.is_some_and(|p| is_japanese_western_boundary(p, c)) {
-                shifted_text.push(JAPANESE_WESTERN_SPACE);
-                inserted.push(shifted_pos);
-                shifted_pos += 1;
-                changed = true;
+                insert(WORD_JOINER);
             }
             let layout_char = if c == ' ' {
                 changed = true;
@@ -138,15 +146,23 @@ pub fn apply_to_span_texts_with_ruby_breaks(
     Some((out, OffsetMap { inserted }))
 }
 
-/// JLREQ §3.2.6 boundary between a Japanese letter and a Western letter or
+/// JLREQ §3.2.6 boundary between Japanese text and a Western letter or
 /// digit. Western symbols, brackets and emoji set solid.
 fn is_japanese_western_boundary(before: char, after: char) -> bool {
     let before_class = classify(before);
     let after_class = classify(after);
-    (before_class.is_japanese_letter() && after_class.is_western_run() && after.is_alphanumeric())
+    (before_class.is_japanese_text() && after_class.is_western_run() && after.is_alphanumeric())
         || (before_class.is_western_run()
             && before.is_alphanumeric()
-            && after_class.is_japanese_letter())
+            && after_class.is_japanese_text())
+}
+
+/// A question or exclamation mark that ends a sentence takes a one-em space
+/// (JLREQ §3.1.6), as in vertical layout.
+fn takes_em_space_after(before: char, after: char) -> bool {
+    let before_class = classify(before);
+    before_class == JapaneseClass::DividingPunctuation
+        && pair_rule(before_class, classify(after)).preferred_em >= 1.0
 }
 
 #[cfg(test)]
@@ -310,6 +326,76 @@ mod tests {
     fn no_japanese_western_space_beside_symbols() {
         assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["あ😀い"]), &[]).is_none());
         assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["(注)あ"]), &[]).is_none());
+    }
+
+    #[test]
+    fn full_width_digits_stay_together() {
+        let (texts, _) = apply(&["２０２６年"]);
+        assert_eq!(
+            texts,
+            vec!["２\u{2060}０\u{2060}２\u{2060}６年".to_string()]
+        );
+    }
+
+    #[test]
+    fn numerals_keep_their_unit() {
+        let (texts, _) = apply(&["体重60㎏"]);
+        assert_eq!(
+            texts,
+            vec![format!("体重{JAPANESE_WESTERN_SPACE}60\u{2060}㎏")]
+        );
+    }
+
+    #[test]
+    fn prefixed_signs_bind_only_to_numerals() {
+        let (texts, _) = apply(&["C# は"]);
+        assert_eq!(texts, vec![format!("C#{WESTERN_WORD_SPACE}は")]);
+    }
+
+    #[test]
+    fn a_line_may_start_with_an_inseparable_mark() {
+        assert!(apply_to_span_texts_with_ruby_breaks(&strings(&["あ…"]), &[]).is_none());
+        let (texts, _) = apply(&["あ……"]);
+        assert_eq!(texts, vec!["あ…\u{2060}…".to_string()]);
+    }
+
+    #[test]
+    fn japanese_western_space_follows_long_vowels_and_small_kana() {
+        let (texts, _) = apply(&["ユーザーID"]);
+        assert_eq!(
+            texts,
+            vec![format!(
+                "ユ\u{2060}ーザ\u{2060}ー{JAPANESE_WESTERN_SPACE}ID"
+            )]
+        );
+    }
+
+    #[test]
+    fn japanese_western_space_keeps_a_forbidden_break_blocked() {
+        let (texts, _) = apply(&["Excelっぽい"]);
+        assert_eq!(
+            texts,
+            vec![format!("Excel{JAPANESE_WESTERN_SPACE}\u{2060}っぽい")]
+        );
+    }
+
+    #[test]
+    fn dividing_punctuation_takes_an_em_space_before_text() {
+        let (texts, _) = apply(&["え？はい"]);
+        assert_eq!(texts, vec![format!("え\u{2060}？{IDEOGRAPHIC_SPACE}はい")]);
+    }
+
+    #[test]
+    fn dividing_punctuation_adds_no_space_in_a_sequence_or_before_a_typed_space() {
+        let (texts, _) = apply(&["え！？はい"]);
+        assert_eq!(
+            texts,
+            vec![format!("え\u{2060}！\u{2060}？{IDEOGRAPHIC_SPACE}はい")]
+        );
+        let (texts, _) = apply(&["え？　はい"]);
+        assert_eq!(texts, vec!["え\u{2060}？　はい".to_string()]);
+        let (texts, _) = apply(&["え？」"]);
+        assert_eq!(texts, vec!["え\u{2060}？\u{2060}」".to_string()]);
     }
 
     #[test]
@@ -537,9 +623,9 @@ mod tests {
     fn joiner_becomes_visible_under_letter_spacing() {
         // skparagraph applies letter-spacing per cluster, INCLUDING the
         // zero-width joiner, which would double the tracking at every
-        // suppressed break, so callers disable kinsoku when letter-spacing
-        // is non-zero. If this test fails (Skia stops spacing ignorables),
-        // drop that gate.
+        // suppressed break, so the horizontal builder gives inserted
+        // joiners zero letter-spacing. If this test fails (Skia stops
+        // spacing ignorables), that special style can go.
         let collection = font_collection();
         let measure = |text: &str| {
             let mut builder = ParagraphBuilder::new(&ParagraphStyle::default(), collection.clone());
@@ -556,8 +642,8 @@ mod tests {
         let diff = (measure("国\u{2060}国") - measure("国国")).abs();
         assert!(
             diff > 0.01,
-            "letter-spacing no longer affects the joiner; the kinsoku \
-             letter-spacing gate can be removed"
+            "letter-spacing no longer affects the joiner; the joiner \
+             style in add_text_with_sheds can be removed"
         );
     }
 }

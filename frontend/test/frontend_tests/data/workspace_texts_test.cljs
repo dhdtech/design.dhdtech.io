@@ -53,10 +53,12 @@
   (let [vertical   (text.styles/generate-paragraph-styles
                     nil
                     {:writing-mode "vertical-rl"
-                     :text-orientation "upright"})
+                     :text-orientation "upright"}
+                    true)
         horizontal (text.styles/generate-paragraph-styles
                     nil
-                    {:writing-mode "horizontal-tb"})]
+                    {:writing-mode "horizontal-tb"}
+                    true)]
     (t/is (= "vertical-rl" (aget vertical "writingMode")))
     (t/is (= "upright" (aget vertical "textOrientation")))
     (t/is (= "normal" (aget vertical "textAutospace")))
@@ -86,7 +88,29 @@
                 :font-size "20"
                 :fills [{:fill-color "#000000" :fill-opacity 1}]})]
     (t/is (= "auto" (aget style "--annotation-clearance")))
-    (t/is (= 2.2 (aget style "lineHeight")))))
+    (t/is (= "calc(max(var(--paragraph-line-height, 1.2), 1.2) + 1)"
+             (aget style "lineHeight")))))
+
+(t/deftest annotation-clearance-adds-the-ruby-size-to-the-paragraph-line-height
+  (let [style (text.styles/generate-text-styles
+               {:grow-type :fixed}
+               {:annotation-clearance "auto"
+                :ruby "かんじ"
+                :ruby-size "quarter"
+                :font-size "20"
+                :fills [{:fill-color "#000000" :fill-opacity 1}]})
+        paragraph (text.styles/generate-paragraph-styles nil {:line-height "2"})]
+    (t/is (= "calc(var(--paragraph-line-height, 1.2) + 0.25)" (aget style "lineHeight")))
+    (t/is (= "2" (aget paragraph "--paragraph-line-height")))))
+
+(t/deftest annotation-clearance-none-keeps-the-line-height
+  (let [style (text.styles/generate-text-styles
+               {:grow-type :fixed}
+               {:annotation-clearance "none"
+                :ruby "かんじ"
+                :font-size "20"
+                :fills [{:fill-color "#000000" :fill-opacity 1}]})]
+    (t/is (nil? (aget style "lineHeight")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -684,3 +708,30 @@
                                {:text "字かな" :font-weight "400"})]
     (t/is (true? (dwt/single-span-range? content 1 3)))
     (t/is (false? (dwt/single-span-range? content 0 2)))))
+
+(defn- paragraphs-content
+  [& texts]
+  {:type "root"
+   :children [{:type "paragraph-set"
+               :children (mapv (fn [text]
+                                 {:type "paragraph"
+                                  :children [{:text text :font-size "14"}]})
+                               texts)}]})
+
+(t/deftest range-style-in-a-later-paragraph-uses-document-offsets
+  (let [shape  {:type :text :content (paragraphs-content "東京" "京都")}
+        result (dwt/update-text-range-attrs shape 3 5 {:font-size "30"})]
+    (t/is (= [["東京" "14"] ["京都" "30"]]
+             (mapv (juxt :text :font-size) (content-spans result))))))
+
+(t/deftest range-style-in-the-first-paragraph-leaves-later-paragraphs-alone
+  (let [shape  {:type :text :content (paragraphs-content "東京" "京都")}
+        result (dwt/update-text-range-attrs shape 0 2 {:font-size "30"})]
+    (t/is (= [["東京" "30"] ["京都" "14"]]
+             (mapv (juxt :text :font-size) (content-spans result))))))
+
+(t/deftest single-span-range-counts-each-paragraph-at-its-own-offset
+  (let [content (paragraphs-content "東京" "京都")]
+    (t/is (true? (dwt/single-span-range? content 0 2)))
+    (t/is (true? (dwt/single-span-range? content 3 5)))
+    (t/is (false? (dwt/single-span-range? content 1 4)))))

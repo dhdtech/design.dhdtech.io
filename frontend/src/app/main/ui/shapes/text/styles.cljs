@@ -24,7 +24,10 @@
   ([{:keys [width height]} node code?]
    (let [valign (:vertical-align node "top")
          ;; The root writing mode makes paragraph blocks stack right-to-left.
-         writing-mode (wm/content-writing-mode node)
+         ;; Generated code keeps it whatever renderer is active.
+         writing-mode (if code?
+                        (jl/content-writing-mode node)
+                        (wm/content-writing-mode node))
          base   #js {:height (when-not code? (fmt/format-pixels height))
                      :width  (when-not code? (fmt/format-pixels width))
                      :display "flex"
@@ -53,39 +56,45 @@
          :verticalAlign "top"}))
 
 (defn generate-paragraph-styles
-  [_shape data]
-  (let [line-height (:line-height data)
-        line-height
-        (if (and (some? line-height) (not= "" line-height))
-          line-height
-          (:line-height txt/default-typography))
+  "Paragraph styles. Writing mode follows the active renderer, except in
+   generated code (`code?`), which always keeps it."
+  ([shape data]
+   (generate-paragraph-styles shape data false))
+  ([_shape data code?]
+   (let [line-height (:line-height data)
+         line-height
+         (if (and (some? line-height) (not= "" line-height))
+           line-height
+           (:line-height txt/default-typography))
 
-        text-align  (:text-align data "start")
-        vertical-layout? (wm/vertical-layout-active?)
-        writing-mode (when vertical-layout? (:writing-mode data))
-        text-orientation (when vertical-layout? (:text-orientation data))
-        base        #js {;; Fix a problem when exporting HTML
-                         :fontSize 0
-                         :lineHeight line-height
-                         :margin 0}]
+         text-align  (:text-align data "start")
+         vertical-layout? (or code? (wm/vertical-layout-active?))
+         writing-mode (when vertical-layout? (:writing-mode data))
+         text-orientation (when vertical-layout? (:text-orientation data))
+         base        #js {;; Fix a problem when exporting HTML
+                          :fontSize 0
+                          :lineHeight line-height
+                          :margin 0}]
 
-    (cond-> base
-      (some? line-height)       (obj/set! "lineHeight" line-height)
-      (some? text-align)        (obj/set! "textAlign" text-align)
-      (some? writing-mode)      (obj/set! "writingMode" writing-mode)
-      (some? writing-mode)      (obj/set! "textSpacingTrim" "normal")
-      (= writing-mode "vertical-rl") (obj/set! "textAutospace" "normal")
-      (some? text-orientation)  (obj/set! "textOrientation" text-orientation))))
+     (cond-> base
+       (some? line-height)       (obj/set! "lineHeight" line-height)
+       (some? line-height)       (obj/set! "--paragraph-line-height" (str line-height))
+       (some? text-align)        (obj/set! "textAlign" text-align)
+       (some? writing-mode)      (obj/set! "writingMode" writing-mode)
+       (some? writing-mode)      (obj/set! "textSpacingTrim" "normal")
+       (= writing-mode "vertical-rl") (obj/set! "textAutospace" "normal")
+       (some? text-orientation)  (obj/set! "textOrientation" text-orientation)))))
 
 (defn css-text-combine-upright
-  "CSS value for a persisted text-combine-upright: the digits variants
-   serialize with their max run length per the CSS `digits <n>` syntax."
+  "CSS value for a persisted text-combine-upright, or nil for the digits
+   variants: browsers do not support CSS `digits <n>`, so renderers wrap each
+   digit run (`jl/digit-combine-segments`) in an `all` span instead."
   [value]
-  (case value
-    "digits"  "digits 4"
-    "digits2" "digits 2"
-    "digits3" "digits 3"
+  (when-not (contains? #{"digits" "digits2" "digits3"} value)
     value))
+
+;; Style of a combined digit run inside a `digits` span.
+(def tcy-run-style #js {:textCombineUpright "all"})
 
 (defn- set-value?
   "True for a stored style value other than empty or \"none\"."
@@ -99,16 +108,22 @@
     (str/format "\"%s\"" font-features)))
 
 (defn- annotation-line-height
-  "Line height that reserves a half-em per ruby/emphasis layer under
-   automatic annotation clearance, or nil."
+  "CSS line height that adds the room of automatic annotation clearance (the
+   ruby at its size plus the emphasis marks) to the paragraph line height,
+   which paragraphs expose as `--paragraph-line-height`. A span's own line
+   height wins when larger, as in the renderer. Nil under `none`."
   [data]
   (when (= "auto" (:annotation-clearance data))
-    (let [layers      (+ (if (jl/visible-ruby data) 1 0)
-                         (if (set-value? (:text-emphasis data)) 1 0))
-          line-height (js/parseFloat (or (:line-height data)
-                                         (:line-height txt/default-typography)))]
-      (when (and (pos? layers) (not (js/isNaN line-height)))
-        (+ line-height (* layers 0.5))))))
+    (let [room      (+ (if (jl/visible-ruby data) (jl/ruby-font-scale (:ruby-size data)) 0)
+                       (if (set-value? (:text-emphasis data)) jl/emphasis-font-scale 0))
+          paragraph (str "var(--paragraph-line-height, "
+                         (:line-height txt/default-typography) ")")
+          own       (js/parseFloat (:line-height data))
+          base      (if (js/isNaN own)
+                      paragraph
+                      (str "max(" paragraph ", " own ")"))]
+      (when (pos? room)
+        (str "calc(" base " + " (fmt/format-number room) ")")))))
 
 (defn- add-japanese-text-styles!
   [style data]
@@ -119,7 +134,7 @@
         line-height          (annotation-line-height data)
         font-size            (:font-size data)]
     (cond-> style
-      (and (string? text-combine-upright) (pos? (alength text-combine-upright)))
+      (some? (css-text-combine-upright text-combine-upright))
       (obj/set! "textCombineUpright" (css-text-combine-upright text-combine-upright))
 
       ;; Stored kebab values ("filled-dot") become the CSS "<fill> <shape>"
@@ -257,7 +272,13 @@
       (obj/set! "fontSize" (ruby-font-size data))
       (obj/set! "lineHeight" "1")
       (obj/set! "textDecoration" "none")
-      (obj/unset! "textCombineUpright")))
+      ;; Base-span styles that belong to the base glyphs, not the reading.
+      (obj/unset! "textCombineUpright")
+      (obj/unset! "textEmphasis")
+      (obj/unset! "fontFeatureSettings")
+      (obj/unset! "display")
+      (obj/unset! "inlineSize")
+      (obj/unset! "--annotation-clearance")))
 
 (defn generate-ruby-container-styles
   [data]

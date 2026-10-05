@@ -106,6 +106,22 @@
   ;; A range without ruby reports null to plugins.
   (assoc jl/span-attr-defaults :ruby nil))
 
+(defn- shape-japanese-value
+  "Value of a Japanese span `attr` over a whole text shape proxy, with unset
+   spans at their default: 'mixed' when spans differ."
+  [shape-proxy attr]
+  (let [default (get japanese-range-defaults attr)
+        values  (->> (-> shape-proxy u/proxy->shape :content)
+                     (txt/node-seq txt/is-text-node?)
+                     (map #(get % attr default)))]
+    (if (seq values) (u/mixed-value values) default)))
+
+(defn- whole-shape-value
+  "Value of a whole-shape paragraph `attr` (writing mode, orientation): the
+   first paragraph's, which every paragraph shares, or `default`."
+  [shape-proxy attr default]
+  (-> shape-proxy u/proxy->shape :content (dm/get-in [:children 0 :children 0 attr]) (d/nilv default)))
+
 (defn- range-japanese-value
   "Value of a Japanese span `attr` over a text range proxy's characters."
   [range-proxy start end attr]
@@ -486,6 +502,11 @@
     {:this true
      :get (fn [self] (range-japanese-value self start end :ruby))
      :set (range-annotation-setter plugin-id page-id id start end :ruby :ruby optional-string?)}
+
+    :rubyHidden
+    {:this true
+     :get (fn [self] (range-japanese-value self start end :ruby-hidden))
+     :set (range-attr-setter plugin-id page-id id start end :rubyHidden :ruby-hidden boolean?)}
 
     :rubySize
     {:this true
@@ -902,51 +923,55 @@
             (st/emit! (dwt/update-attrs id {:vertical-align value})))))}
 
      {:name "writingMode"
-      :get #(-> % u/proxy->shape text-props :writing-mode format/format-mixed)
+      :get #(whole-shape-value % :writing-mode "horizontal-tb")
       :set (shape-attr-setter plugin-id page-id :writingMode :writing-mode (enum-value? writing-mode-re))}
 
      {:name "textOrientation"
-      :get #(-> % u/proxy->shape text-props :text-orientation format/format-mixed)
+      :get #(whole-shape-value % :text-orientation "mixed")
       :set (shape-attr-setter plugin-id page-id :textOrientation :text-orientation (enum-value? text-orientation-re))}
 
      {:name "textCombineUpright"
-      :get #(-> % u/proxy->shape text-props :text-combine-upright format/format-mixed)
+      :get #(shape-japanese-value % :text-combine-upright)
       :set (shape-attr-setter plugin-id page-id :textCombineUpright :text-combine-upright (enum-value? text-combine-upright-re))}
 
      {:name "textEmphasis"
-      :get #(-> % u/proxy->shape text-props :text-emphasis format/format-mixed)
+      :get #(shape-japanese-value % :text-emphasis)
       :set (shape-attr-setter plugin-id page-id :textEmphasis :text-emphasis (enum-value? text-emphasis-re))}
 
      {:name "warichu"
-      :get #(-> % u/proxy->shape text-props :warichu format/format-mixed)
+      :get #(shape-japanese-value % :warichu)
       :set (shape-annotation-setter plugin-id page-id :warichu :warichu (enum-value? warichu-re))}
 
      {:name "fontFeatures"
-      :get #(-> % u/proxy->shape text-props :font-features format/format-mixed)
+      :get #(shape-japanese-value % :font-features)
       :set (shape-attr-setter plugin-id page-id :fontFeatures :font-features (enum-value? font-features-re))}
 
      {:name "annotationClearance"
-      :get #(-> % u/proxy->shape text-props :annotation-clearance format/format-mixed)
+      :get #(shape-japanese-value % :annotation-clearance)
       :set (shape-attr-setter plugin-id page-id :annotationClearance :annotation-clearance (enum-value? annotation-clearance-re))}
 
      {:name "ruby"
-      :get #(-> % u/proxy->shape text-props :ruby format/format-mixed)
+      :get #(shape-japanese-value % :ruby)
       :set (shape-annotation-setter plugin-id page-id :ruby :ruby optional-string?)}
 
+     {:name "rubyHidden"
+      :get #(shape-japanese-value % :ruby-hidden)
+      :set (shape-attr-setter plugin-id page-id :rubyHidden :ruby-hidden boolean?)}
+
      {:name "rubySize"
-      :get #(-> % u/proxy->shape text-props :ruby-size format/format-mixed)
+      :get #(shape-japanese-value % :ruby-size)
       :set (shape-attr-setter plugin-id page-id :rubySize :ruby-size (enum-value? ruby-size-re))}
 
      {:name "rubyAlign"
-      :get #(-> % u/proxy->shape text-props :ruby-align format/format-mixed)
+      :get #(shape-japanese-value % :ruby-align)
       :set (shape-attr-setter plugin-id page-id :rubyAlign :ruby-align (enum-value? ruby-align-re))}
 
      {:name "rubyOverhang"
-      :get #(-> % u/proxy->shape text-props :ruby-overhang format/format-mixed)
+      :get #(shape-japanese-value % :ruby-overhang)
       :set (shape-attr-setter plugin-id page-id :rubyOverhang :ruby-overhang (enum-value? ruby-overhang-re))}
 
      {:name "rubySide"
-      :get #(-> % u/proxy->shape text-props :ruby-side format/format-mixed)
+      :get #(shape-japanese-value % :ruby-side)
       :set (shape-attr-setter plugin-id page-id :rubySide :ruby-side (enum-value? ruby-side-re))}
 
      {:name "textBounds"

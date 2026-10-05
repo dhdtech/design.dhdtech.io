@@ -3,9 +3,10 @@ use crate::{
     error::Result,
     math::Rect,
     shapes::{
-        add_horizontal_span, calculate_text_layout_data, horizontal_aki_sheds, set_paint_fill,
-        text_vertical, vertical_align_offset, Paragraph as TextParagraph, ParagraphBuilderGroup,
-        ParagraphLayout, Stroke, StrokeKind, TextContent, TextDecorationSegment,
+        add_horizontal_span, calculate_text_layout_data, horizontal_aki_sheds,
+        horizontal_ruby_spacing, set_paint_fill, text_vertical, vertical_align_offset,
+        HorizontalOffsets, Paragraph as TextParagraph, ParagraphBuilderGroup, ParagraphLayout,
+        Stroke, StrokeKind, TextContent, TextDecorationSegment,
     },
     utils::{get_fallback_fonts, get_font_collection},
 };
@@ -156,7 +157,14 @@ pub fn stroke_paragraph_builder_group_from_text(
 
         let (span_texts, _) = paragraph.layout_span_texts();
         let sheds = horizontal_aki_sheds(paragraph, &span_texts);
-        for ((span, text), sheds) in paragraph.children().iter().zip(&span_texts).zip(&sheds) {
+        let ruby_spacing = horizontal_ruby_spacing(paragraph, &span_texts);
+        for (((span, text), sheds), extra) in paragraph
+            .children()
+            .iter()
+            .zip(&span_texts)
+            .zip(&sheds)
+            .zip(&ruby_spacing.adjustments)
+        {
             let (stroke_paints, stroke_layer_opacity) =
                 get_text_stroke_paints(stroke, bounds, remove_stroke_alpha);
 
@@ -178,7 +186,7 @@ pub fn stroke_paragraph_builder_group_from_text(
                     paragraph.line_height(),
                 );
                 builder.push_style(&stroke_style);
-                add_horizontal_span(builder, span, text, sheds, &stroke_style, fonts);
+                add_horizontal_span(builder, span, text, sheds, extra, &stroke_style, fonts);
             }
         }
 
@@ -698,10 +706,6 @@ fn paint_text_with_emoji_overlay(
     let mut layout_info =
         calculate_text_layout_data(shape, text_content, paragraph_builder_groups, true);
 
-    // Ruby draws only when the fill pass has the standard one-layout-per-
-    // paragraph shape (stroke/shadow silhouette passes never reach here).
-    let ruby_per_paragraph = layout_info.paragraphs.len() == text_content.paragraphs().len();
-
     for para in &mut layout_info.paragraphs {
         para.paragraph.paint(canvas, (para.x, para.y));
 
@@ -726,16 +730,15 @@ fn paint_text_with_emoji_overlay(
             paint_emoji_overlay(canvas, para);
         }
 
-        if ruby_per_paragraph {
-            crate::shapes::paint_horizontal_ruby(
-                canvas,
-                text_content,
-                para.source_paragraph,
-                &para.paragraph,
-                para.x,
-                para.y,
-            );
-        }
+        // Like warichu and emphasis, ruby takes the paint of this pass.
+        crate::shapes::paint_horizontal_ruby(
+            canvas,
+            text_content,
+            para.source_paragraph,
+            &para.paragraph,
+            para.x,
+            para.y,
+        );
 
         for deco in &para.decorations {
             draw_decoration_segment(canvas, deco);
@@ -1284,22 +1287,25 @@ fn draw_decoration_segment(canvas: &Canvas, deco: &TextDecorationSegment) {
 type LineDecoration<'a> = (usize, usize, TextDecoration, &'a StyleMetrics<'a>);
 
 /// UTF-16 ranges of the spans that ask for a decoration we draw.
+/// Builder-text range of every underlined or struck span. Warichu spans
+/// collapse to a placeholder and get no bar.
 fn decorated_span_ranges(text_paragraph: &TextParagraph) -> Vec<(usize, usize, TextDecoration)> {
-    let mut ranges = Vec::new();
-    let mut offset = 0;
-    for span in text_paragraph.children() {
-        let len = span.apply_text_transform().encode_utf16().count();
-        match span.text_decoration {
+    let offsets = HorizontalOffsets::new(text_paragraph);
+    text_paragraph
+        .children()
+        .iter()
+        .zip(&offsets.ranges)
+        .filter_map(|(span, range)| match span.text_decoration {
             Some(kind)
-                if kind == TextDecoration::UNDERLINE || kind == TextDecoration::LINE_THROUGH =>
+                if !range.warichu
+                    && (kind == TextDecoration::UNDERLINE
+                        || kind == TextDecoration::LINE_THROUGH) =>
             {
-                ranges.push((offset, offset + len, kind))
+                Some((range.builder_start, range.builder_end, kind))
             }
-            _ => {}
-        }
-        offset += len;
-    }
-    ranges
+            _ => None,
+        })
+        .collect()
 }
 
 /// Style run covering `offset`; runs are keyed by their start index.
@@ -1511,6 +1517,36 @@ mod tests {
                 (2, 9, TextDecoration::UNDERLINE),
                 (9, 10, TextDecoration::UNDERLINE),
             ]
+        );
+    }
+
+    #[test]
+    fn decorated_ranges_follow_inserted_kinsoku_characters() {
+        // A word joiner goes before 。, so the next span starts one unit later.
+        let para = paragraph(vec![
+            span("あ。", None, None),
+            span("い", Some(TextDecoration::UNDERLINE), None),
+        ]);
+
+        assert_eq!(
+            decorated_span_ranges(&para),
+            vec![(3, 4, TextDecoration::UNDERLINE)]
+        );
+    }
+
+    #[test]
+    fn decorated_ranges_skip_warichu_placeholders() {
+        let mut note = span("割注入り", None, None);
+        note.warichu = true;
+        let para = paragraph(vec![
+            note,
+            span("い", Some(TextDecoration::UNDERLINE), None),
+        ]);
+
+        // The warichu span collapses to a three-unit placeholder.
+        assert_eq!(
+            decorated_span_ranges(&para),
+            vec![(3, 4, TextDecoration::UNDERLINE)]
         );
     }
 

@@ -3,7 +3,9 @@
 // (aki, oikomi, inter-script spacing) and pick column breaks (kinsoku,
 // burasage, oidashi).
 
-use crate::shapes::japanese::{classify, pair_rule, shed_pair_aki, JapaneseClass};
+use crate::shapes::japanese::{
+    break_allowed_between, classify, pair_rule, shed_pair_aki, JapaneseClass,
+};
 use crate::shapes::kinsoku::{forbidden_at_line_end, forbidden_at_line_start};
 use crate::shapes::TextAlign;
 
@@ -27,6 +29,9 @@ pub(super) struct FlowItem {
     pub ch: Option<char>,
     /// Same source char as the previous item (text transform); keep together.
     pub keep_with_previous: bool,
+    /// Continues the previous item's word across a style or font run
+    /// boundary; a break here would split the word.
+    pub joins_previous: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +80,7 @@ impl FlowCell {
             extent: self.cell.extent,
             ch: self.ch,
             keep_with_previous: self.keep_with_previous || self.shares_previous_box,
+            joins_previous: false,
         }
     }
 
@@ -96,7 +102,29 @@ impl FlowCell {
 }
 
 pub(super) fn flow_items(cells: &[FlowCell]) -> Vec<FlowItem> {
-    cells.iter().map(FlowCell::item).collect()
+    let mut items: Vec<FlowItem> = cells.iter().map(FlowCell::item).collect();
+    for (index, pair) in cells.windows(2).enumerate() {
+        items[index + 1].joins_previous = continues_word(&pair[0], &pair[1]);
+    }
+    items
+}
+
+/// True when two sideways runs meet inside a word: a letter or digit on
+/// both sides of a style or font boundary.
+fn continues_word(previous: &FlowCell, next: &FlowCell) -> bool {
+    matches!(
+        (previous.script, next.script),
+        (
+            FlowScript::Rotated {
+                ends_alphanumeric: true,
+                ..
+            },
+            FlowScript::Rotated {
+                starts_alphanumeric: true,
+                ..
+            }
+        )
+    )
 }
 
 /// Punctuation that may hang past the column bottom (ぶら下げ / burasage): the
@@ -113,13 +141,44 @@ fn overflows(cursor: f32, item: &FlowItem, max_height: f32) -> bool {
         && !item.ch.is_some_and(can_hang)
 }
 
+/// Why a column may not break before `items[at]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BreakBlock {
+    /// Kinsoku: a forbidden-at-line-start or -end character.
+    Kinsoku,
+    /// A word, numeral run, identical inseparable pair or numeral with its
+    /// unit (JLREQ §3.1.10).
+    Unbreakable,
+}
+
+fn break_block(items: &[FlowItem], at: usize) -> Option<BreakBlock> {
+    let (previous, next) = (&items[at - 1], &items[at]);
+    if next.joins_previous {
+        return Some(BreakBlock::Unbreakable);
+    }
+    let kinsoku = next.ch.is_some_and(forbidden_at_line_start)
+        || previous.ch.is_some_and(forbidden_at_line_end);
+    if kinsoku {
+        return Some(BreakBlock::Kinsoku);
+    }
+    match (previous.ch, next.ch) {
+        (Some(before), Some(after)) if !break_allowed_between(before, after) => {
+            Some(BreakBlock::Unbreakable)
+        }
+        _ => None,
+    }
+}
+
 /// First item of the next column when `items[i]` overflows the column
 /// starting at `column_start`. Kinsoku: no forbidden-at-line-end char at the
 /// column bottom and no forbidden-at-line-start char at the next column top;
 /// offending predecessors move to the new column (oidashi), at most
-/// `MAX_KINSOKU_SHIFT` of them. `None` keeps `items[i]` in the column when it
-/// closes an atomic composite (group ruby or an expanded source scalar) that
-/// began at the column head.
+/// `MAX_KINSOKU_SHIFT` of them. Words and other unbreakable sequences move
+/// whole when they fit a column. A sequence that cannot move without
+/// emptying the column or overflowing the next one breaks where it
+/// overflows. `None`
+/// keeps `items[i]` in the column when it closes an atomic composite (group
+/// ruby or an expanded source scalar) that began at the column head.
 fn column_break(
     items: &[FlowItem],
     column_start: usize,
@@ -135,24 +194,31 @@ fn column_break(
         index
     };
 
-    let mut break_at = skip_kept(i);
-    if break_at == column_start && items[i].keep_with_previous {
+    let natural = skip_kept(i);
+    if natural == column_start && items[i].keep_with_previous {
         return None;
     }
-    let mut shifted = 0;
-    while break_at > column_start
-        && shifted < MAX_KINSOKU_SHIFT
-        && (items[break_at].ch.is_some_and(forbidden_at_line_start)
-            || items[break_at - 1].ch.is_some_and(forbidden_at_line_end))
-    {
-        break_at = skip_kept(break_at - 1);
-        shifted += 1;
+    let mut break_at = natural;
+    let mut kinsoku_shifts = 0;
+    while break_at > column_start {
+        match break_block(items, break_at) {
+            None => break,
+            Some(BreakBlock::Kinsoku) if kinsoku_shifts >= MAX_KINSOKU_SHIFT => break,
+            Some(block) => {
+                if block == BreakBlock::Kinsoku {
+                    kinsoku_shifts += 1;
+                }
+                break_at = skip_kept(break_at - 1);
+            }
+        }
     }
-    // Drop the shift if it would overflow the new column too: a kinsoku
-    // violation is better than overflowing the wrap budget.
+    // Drop the shift if it would empty this column or overflow the new one:
+    // a kinsoku violation is better than overflowing the wrap budget.
     let shifted_extent: f32 = items[break_at..i].iter().map(|it| it.extent).sum();
-    if break_at < i && shifted_extent + items[i].extent > max_height {
-        break_at = i;
+    if break_at == column_start
+        || (break_at < i && shifted_extent + items[i].extent > max_height + FIT_TOLERANCE)
+    {
+        break_at = natural;
     }
     Some(break_at)
 }
@@ -701,7 +767,105 @@ mod tests {
             extent,
             ch: Some(ch),
             keep_with_previous: false,
+            joins_previous: false,
         }
+    }
+
+    fn run_item(extent: f32, joins_previous: bool) -> FlowItem {
+        FlowItem {
+            extent,
+            ch: None,
+            keep_with_previous: false,
+            joins_previous,
+        }
+    }
+
+    fn columns(placements: &[(usize, f32)]) -> Vec<usize> {
+        placements.iter().map(|(column, _)| *column).collect()
+    }
+
+    #[test]
+    fn plan_columns_keeps_upright_latin_words_whole() {
+        let items: Vec<FlowItem> = "あいPenpot".chars().map(|c| item(10.0, c)).collect();
+        let placements = plan_columns(&items, 70.0);
+        assert_eq!(columns(&placements), vec![0, 0, 1, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn plan_columns_keeps_a_word_split_across_runs_whole() {
+        let items = vec![
+            item(24.0, 'あ'),
+            run_item(44.0, false),
+            run_item(38.0, true),
+        ];
+        let placements = plan_columns(&items, 90.0);
+        assert_eq!(placements, vec![(0, 0.0), (1, 0.0), (1, 44.0)]);
+    }
+
+    #[test]
+    fn plan_columns_keeps_full_width_numbers_whole() {
+        let items: Vec<FlowItem> = "あいう２０２６年".chars().map(|c| item(10.0, c)).collect();
+        let placements = plan_columns(&items, 40.0);
+        assert_eq!(columns(&placements), vec![0, 0, 0, 1, 1, 1, 1, 2]);
+    }
+
+    #[test]
+    fn full_width_number_moves_to_the_next_column_whole() {
+        let provider = provider_with_fallback(VMTX_TEST_FONT, TEST_FONT);
+        let wide = layout_with(&provider, &make_content(&["あいう２０２６年"], 1000.0));
+        let height = wide.cells[..4].iter().map(|cell| cell.extent).sum::<f32>() + 2.0;
+        let layout = layout_with_height(
+            &provider,
+            &make_content(&["あいう２０２６年"], height),
+            height,
+        );
+        let columns: Vec<(usize, Option<String>)> = layout
+            .cells
+            .iter()
+            .map(|cell| {
+                (
+                    cell.column,
+                    Some(format!("{:?}", cell.kind).chars().take(10).collect()),
+                )
+            })
+            .collect();
+        let digit_columns: Vec<usize> = layout.cells[3..7].iter().map(|cell| cell.column).collect();
+        assert_eq!(digit_columns, vec![1, 1, 1, 1], "cells: {columns:?}");
+    }
+
+    #[test]
+    fn plan_columns_keeps_a_numeral_with_its_unit() {
+        let items: Vec<FlowItem> = "体重60㎏".chars().map(|c| item(10.0, c)).collect();
+        let placements = plan_columns(&items, 40.0);
+        assert_eq!(columns(&placements), vec![0, 0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn plan_columns_never_leaves_an_empty_column() {
+        let items: Vec<FlowItem> = "「「あ".chars().map(|c| item(10.0, c)).collect();
+        let placements = plan_columns(&items, 25.0);
+        assert_eq!(columns(&placements), vec![0, 0, 1]);
+    }
+
+    #[test]
+    fn plan_columns_oidashi_ignores_float_noise_in_the_budget() {
+        let items = vec![item(22.0, 'あ'), item(22.0, 'い'), item(22.0, '」')];
+        let placements = plan_columns(&items, 44.0 - 0.00002);
+        assert_eq!(columns(&placements), vec![0, 1, 1]);
+    }
+
+    #[test]
+    fn sideways_words_wrap_at_spaces() {
+        let provider = provider(TEST_FONT);
+        let wide = layout_with(&provider, &make_content(&["Penpot Work"], 1000.0));
+        let first_word = wide.cells[0].extent;
+        let layout = layout_with_height(
+            &provider,
+            &make_content(&["Penpot Work"], first_word + 1.0),
+            first_word + 1.0,
+        );
+        assert_eq!(layout.cells.len(), 2, "one sideways cell per word");
+        assert_ne!(layout.cells[0].column, layout.cells[1].column);
     }
 
     fn aligned_content(text: &str, height: f32, align: TextAlign) -> crate::shapes::TextContent {
@@ -939,8 +1103,8 @@ mod tests {
             before_ideograph.cells[0].extent
         );
         assert!(
-            (before_dividing.cells[0].extent - natural_extent - em).abs() < 0.01,
-            "！ before ？ adds one em, got {} over natural {natural_extent}",
+            (before_dividing.cells[0].extent - natural_extent).abs() < 0.01,
+            "！ before ？ adds no aki, got {} over natural {natural_extent}",
             before_dividing.cells[0].extent
         );
         assert!(

@@ -164,3 +164,18 @@
       (is (re-find #"font-size:10px" markup))
       (is (re-find #"text-orientation:upright" markup))
       (is (not (re-find #"<foreignObject\b" markup))))))
+
+(deftest vertical-digit-composite-svg-combines-its-own-strip
+  (testing "SVG applies text-combine-upright per text element, so each digit-run strip combines"
+    (let [{:keys [objects shapes]} (setup-text {:width 40 :height 120}
+                                               (vertical-strip {:y 40 :height 40 :text "平成"
+                                                                :text-combine-upright "digits2"})
+                                               (vertical-strip {:y 60 :height 20 :text "31"
+                                                                :text-combine-upright "digits2"})
+                                               (vertical-strip {:y 80 :height 20 :text "年"
+                                                                :text-combine-upright "digits2"}))
+          markup (svg/generate-markup objects shapes)]
+      (is (= 1 (count-matches #"text-combine-upright:all" markup))
+          "only the 31 strip combines")
+      (is (re-find #"text-combine-upright:all[^>]*>31<" markup))
+      (is (not (re-find #"digits" markup))))))

@@ -1,6 +1,7 @@
 use super::text::{add_text_with_tabs, Paragraph, TextContent, TextSpan};
 use super::text_vertical::{
-    distribute_ruby_tops, shape_segment_with_fallbacks, single_glyph_blob, span_font_families,
+    distribute_ruby_tops, ruby_overhang_room, shape_segment_with_fallbacks, single_glyph_blob,
+    span_font_families,
 };
 use crate::globals::get_resources;
 use crate::math::Point;
@@ -28,17 +29,12 @@ pub(crate) fn layout_span_texts(paragraph: &Paragraph) -> (Vec<String>, kinsoku:
         .iter()
         .map(TextSpan::apply_text_transform)
         .collect();
-    let has_letter_spacing = paragraph.letter_spacing() != 0.0
-        || paragraph
-            .children()
-            .iter()
-            .any(|span| span.letter_spacing != 0.0);
     // Text without Japanese characters or ruby keeps plain Skia layout.
     let uses_japanese_layout = paragraph.children().iter().any(TextSpan::has_ruby)
         || texts
             .iter()
             .any(|text| text.chars().any(is_japanese_text_char));
-    if uses_japanese_layout && !has_letter_spacing {
+    if uses_japanese_layout {
         let ruby_breaks: Vec<Option<Vec<usize>>> = paragraph
             .children()
             .iter()
@@ -60,14 +56,23 @@ fn is_curly_quote(ch: char) -> bool {
     matches!(ch, '‘' | '’' | '“' | '”')
 }
 
-/// Char indices, per span of the layout `texts`, of the characters whose
-/// advance loses a half-em to the punctuation aki rules of `shed_pair_aki`:
-/// a closing mark sheds its trailing aki, and the character before an
-/// opening bracket gives up the bracket's leading aki. Inserted word joiners
-/// are transparent. Spans with `palt` already set punctuation proportionally,
-/// and curly quotes never shed.
-pub(crate) fn horizontal_aki_sheds(paragraph: &Paragraph, texts: &[String]) -> Vec<Vec<usize>> {
-    let mut sheds: Vec<Vec<usize>> = vec![Vec::new(); texts.len()];
+/// (char index, amount) per span of the layout `texts` for the characters
+/// whose advance loses a half-em to the punctuation aki rules of
+/// `shed_pair_aki`: a closing mark sheds half of its own em, and the
+/// character before an opening bracket gives up half of the bracket's em.
+/// Inserted word joiners are transparent. Spans with `palt` already set
+/// punctuation proportionally, and curly quotes never shed.
+pub(crate) fn horizontal_aki_sheds(
+    paragraph: &Paragraph,
+    texts: &[String],
+) -> Vec<Vec<(usize, f32)>> {
+    let mut sheds: Vec<Vec<(usize, f32)>> = vec![Vec::new(); texts.len()];
+    let half_em = |span: usize| {
+        paragraph
+            .children()
+            .get(span)
+            .map_or(0.0, |span| span.font_size * 0.5)
+    };
     // (span, char index in the span text, class) of every real character.
     let chars: Vec<(usize, usize, Option<JapaneseClass>)> = texts
         .iter()
@@ -87,26 +92,194 @@ pub(crate) fn horizontal_aki_sheds(paragraph: &Paragraph, texts: &[String]) -> V
         })
         .collect();
     for pair in chars.windows(2) {
-        let [(before_span, before_index, Some(before)), (_, _, Some(after))] = *pair else {
+        let [(before_span, before_index, Some(before)), (after_span, _, Some(after))] = *pair
+        else {
             continue;
         };
-        let (trailing, leading) = shed_pair_aki(before, after);
-        if trailing || leading {
-            sheds[before_span].push(before_index);
+        match shed_pair_aki(before, after) {
+            (true, _) => sheds[before_span].push((before_index, half_em(before_span))),
+            (_, true) => sheds[before_span].push((before_index, half_em(after_span))),
+            _ => {}
         }
     }
     sheds
 }
 
+/// Extra spacing for long horizontal ruby, per span of a paragraph.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HorizontalRubySpacing {
+    /// Letter-spacing added to characters of the layout texts: (char index,
+    /// amount) per span.
+    pub adjustments: Vec<Vec<(usize, f32)>>,
+    /// Gap added between the base characters of each ruby span.
+    pub base_gaps: Vec<f32>,
+    /// Spacing added before each ruby base, on the previous character: half
+    /// a gap, or none at a paragraph start, where the base takes it after.
+    pub leading_gaps: Vec<f32>,
+    /// Overhang room (before, after) of each ruby span over its neighbours.
+    pub rooms: Vec<(f32, f32)>,
+}
+
+/// The span that owns a character of the layout `texts`, its char index and
+/// the character, searching from (span, index) in `step` direction and
+/// skipping inserted word joiners.
+fn layout_neighbour(texts: &[String], span: usize, forward: bool) -> Option<(usize, usize, char)> {
+    let real = |(index, ch): (usize, char)| (ch != kinsoku::WORD_JOINER).then_some((index, ch));
+    if forward {
+        texts
+            .iter()
+            .enumerate()
+            .skip(span + 1)
+            .find_map(|(owner, text)| {
+                text.chars()
+                    .enumerate()
+                    .find_map(real)
+                    .map(|(index, ch)| (owner, index, ch))
+            })
+    } else {
+        texts
+            .iter()
+            .enumerate()
+            .take(span)
+            .rev()
+            .find_map(|(owner, text)| {
+                let chars: Vec<char> = text.chars().collect();
+                chars
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .rev()
+                    .find_map(real)
+                    .map(|(index, ch)| (owner, index, ch))
+            })
+    }
+}
+
+/// Spacing that makes room for horizontal ruby longer than its base. The
+/// reading overhangs its neighbours within their `ruby_overhang_room`; the
+/// rest spreads the base (JLREQ §3.3.8): an equal gap between base
+/// characters and half a gap at each end, the leading half on the previous
+/// character.
+pub(crate) fn horizontal_ruby_spacing(
+    paragraph: &Paragraph,
+    texts: &[String],
+) -> HorizontalRubySpacing {
+    if !paragraph
+        .children()
+        .iter()
+        .any(|span| span.has_ruby() && !span.is_warichu())
+    {
+        return HorizontalRubySpacing::empty(texts.len());
+    }
+    let fallback_families: Vec<String> = get_fallback_fonts().iter().cloned().collect();
+    horizontal_ruby_spacing_with(
+        paragraph,
+        texts,
+        get_resources().fonts.font_provider(),
+        &fallback_families,
+    )
+}
+
+impl HorizontalRubySpacing {
+    fn empty(spans: usize) -> Self {
+        Self {
+            adjustments: vec![Vec::new(); spans],
+            base_gaps: vec![0.0; spans],
+            leading_gaps: vec![0.0; spans],
+            rooms: vec![(0.0, 0.0); spans],
+        }
+    }
+}
+
+/// `horizontal_ruby_spacing` with explicit fonts.
+fn horizontal_ruby_spacing_with(
+    paragraph: &Paragraph,
+    texts: &[String],
+    font_provider: &skia::textlayout::TypefaceFontProvider,
+    fallback_families: &[String],
+) -> HorizontalRubySpacing {
+    let spans = paragraph.children();
+    let mut spacing = HorizontalRubySpacing::empty(texts.len());
+    let fallback_mgr = FontMgr::from(font_provider.clone());
+    let width = |span: &TextSpan, text: &str, font_size: f32| -> f32 {
+        shape_segment_with_fallbacks(
+            text,
+            font_size,
+            &span_font_families(span, fallback_families),
+            font_provider,
+            false,
+            span.font_features,
+            &fallback_mgr,
+        )
+        .iter()
+        .flat_map(|run| run.advances.iter())
+        .sum()
+    };
+    for (index, (span, text)) in spans.iter().zip(texts).enumerate() {
+        let ruby_text = span.ruby_text();
+        if ruby_text.is_empty() || span.is_warichu() {
+            continue;
+        }
+        let base: Vec<usize> = text
+            .chars()
+            .enumerate()
+            .filter(|(_, ch)| *ch != kinsoku::WORD_JOINER)
+            .map(|(char_index, _)| char_index)
+            .collect();
+        let Some(&last) = base.last() else {
+            continue;
+        };
+        let ruby_font_size = span.ruby_font_size();
+        let base_width = width(span, &span.apply_text_transform(), span.font_size)
+            + span.letter_spacing * base.len() as f32;
+        let ruby_width = width(span, ruby_text, ruby_font_size);
+        let previous = layout_neighbour(texts, index, false);
+        let next = layout_neighbour(texts, index, true);
+        let room = |neighbour: Option<(usize, usize, char)>| {
+            neighbour.map_or(0.0, |(owner, _, ch)| {
+                ruby_overhang_room(
+                    span.ruby_overhang,
+                    Some(ch),
+                    spans[owner].has_ruby(),
+                    spans[owner].font_size,
+                    ruby_font_size,
+                )
+            })
+        };
+        let rooms = (room(previous), room(next));
+        spacing.rooms[index] = rooms;
+        let deficit = ruby_width - base_width - rooms.0 - rooms.1;
+        if deficit <= 0.0 {
+            continue;
+        }
+        let gap = deficit / base.len() as f32;
+        spacing.base_gaps[index] = gap;
+        for &char_index in &base {
+            let amount = if char_index == last { gap / 2.0 } else { gap };
+            spacing.adjustments[index].push((char_index, amount));
+        }
+        match previous {
+            Some((owner, char_index, _)) => {
+                spacing.adjustments[owner].push((char_index, gap / 2.0));
+                spacing.leading_gaps[index] = gap / 2.0;
+            }
+            None => spacing.adjustments[index].push((last, gap / 2.0)),
+        }
+    }
+    spacing
+}
+
 /// Add a span to a horizontal paragraph builder. A warichu span becomes one
 /// inline placeholder so its two lines wrap as a unit; its glyphs are painted
 /// after layout. The characters at `sheds` (from `horizontal_aki_sheds`)
-/// set a half-em narrower.
+/// set narrower by their amounts; `extra` (from `horizontal_ruby_spacing`)
+/// adds letter-spacing to characters.
 pub(crate) fn add_horizontal_span(
     builder: &mut ParagraphBuilder,
     span: &TextSpan,
     builder_text: &str,
-    sheds: &[usize],
+    sheds: &[(usize, f32)],
+    extra: &[(usize, f32)],
     text_style: &skia::textlayout::TextStyle,
     fonts: &skia::textlayout::FontCollection,
 ) {
@@ -141,29 +314,48 @@ pub(crate) fn add_horizontal_span(
         builder.add_text(HORIZONTAL_WARICHU_STYLE_ANCHOR.to_string());
         builder.add_text(HORIZONTAL_WARICHU_BREAK_ANCHOR.to_string());
     } else {
-        add_text_with_sheds(builder, span, builder_text, sheds, text_style);
+        add_text_with_sheds(builder, span, builder_text, sheds, extra, text_style);
     }
 }
 
-/// Add `text`, setting the characters at `sheds` a half-em narrower through
-/// letter-spacing so the builder text stays unchanged.
+/// Add `text`, adjusting the letter-spacing of single characters so the
+/// builder text stays unchanged: those at `sheds` lose their amount and
+/// those in `extra` take its added spacing. Skia tracks every cluster,
+/// including the zero-width word joiners the kinsoku pass inserts, so those
+/// take no letter-spacing.
 fn add_text_with_sheds(
     builder: &mut ParagraphBuilder,
     span: &TextSpan,
     text: &str,
-    sheds: &[usize],
+    sheds: &[(usize, f32)],
+    extra: &[(usize, f32)],
     text_style: &skia::textlayout::TextStyle,
 ) {
-    let mut shed_style = text_style.clone();
-    shed_style.set_letter_spacing(text_style.letter_spacing() - span.font_size * 0.5);
+    let tracking = text_style.letter_spacing();
     let mut piece_start = 0;
     for (index, (byte, ch)) in text.char_indices().enumerate() {
-        if !sheds.contains(&index) {
+        let amount_at = |adjustments: &[(usize, f32)]| -> f32 {
+            adjustments
+                .iter()
+                .filter(|(char_index, _)| *char_index == index)
+                .map(|(_, amount)| amount)
+                .sum()
+        };
+        let added = amount_at(extra);
+        let shed = amount_at(sheds);
+        let letter_spacing = if ch == kinsoku::WORD_JOINER {
+            0.0
+        } else {
+            tracking + added - shed
+        };
+        if letter_spacing == tracking {
             continue;
         }
+        let mut style = text_style.clone();
+        style.set_letter_spacing(letter_spacing);
         let end = byte + ch.len_utf8();
         add_text_with_tabs(builder, &text[piece_start..byte], span.font_size);
-        builder.push_style(&shed_style);
+        builder.push_style(&style);
         builder.add_text(&text[byte..end]);
         builder.pop();
         piece_start = end;
@@ -383,7 +575,7 @@ fn source_char_boundaries(paragraph: &Paragraph) -> Vec<usize> {
 
 /// Placeholder rect of each horizontal warichu span, keyed by span index.
 /// Tabs in normal spans are placeholders too, so they are skipped.
-fn horizontal_warichu_placeholders(
+pub(crate) fn horizontal_warichu_placeholders(
     paragraph: &Paragraph,
     laid_out: &skia::textlayout::Paragraph,
 ) -> Vec<(usize, skia::Rect)> {
@@ -802,14 +994,33 @@ fn split_counts_by_extent(extents: &[f32], total: usize) -> Vec<usize> {
     counts
 }
 
-fn next_horizontal_ruby_range(
-    offset_map: &kinsoku::OffsetMap,
-    utf16_cursor: &mut usize,
-    text: &str,
-) -> std::ops::Range<usize> {
-    let start = *utf16_cursor;
-    *utf16_cursor += text.encode_utf16().count();
-    offset_map.to_shifted(start)..offset_map.to_shifted(*utf16_cursor)
+/// (span index, builder-text range) of every span whose ruby is painted:
+/// visible ruby on a base that is not warichu.
+fn horizontal_ruby_targets(
+    paragraph: &Paragraph,
+    offsets: &HorizontalOffsets,
+) -> Vec<(usize, std::ops::Range<usize>)> {
+    paragraph
+        .children()
+        .iter()
+        .zip(&offsets.ranges)
+        .filter(|(span, range)| {
+            !span.ruby_text().is_empty()
+                && !range.warichu
+                && range.builder_start < range.builder_end
+        })
+        .map(|(_, range)| (range.span, range.builder_start..range.builder_end))
+        .collect()
+}
+
+/// Paint of the pass that laid out the base: fill, stroke, shadow or mask.
+/// `fallback` covers a base Skia kept no style metrics for.
+fn horizontal_ruby_paint(
+    laid_out: &skia::textlayout::Paragraph,
+    range: &HorizontalSpanRange,
+    fallback: skia::Paint,
+) -> skia::Paint {
+    horizontal_span_style(laid_out, range).map_or(fallback, |style| style.foreground())
 }
 
 /// Ink edge of `glyph` (bottom when `over`, else top), used to attach ruby
@@ -853,19 +1064,21 @@ pub(crate) fn paint_horizontal_ruby(
     let fallback_mgr = FontMgr::from(font_provider.clone());
     let fallback_families: Vec<String> = get_fallback_fonts().iter().cloned().collect();
     let bounds = text_content.bounds();
-    let (_, offset_map) = paragraph.layout_span_texts();
+    let (layout_texts, _) = paragraph.layout_span_texts();
+    let spacing = horizontal_ruby_spacing(paragraph, &layout_texts);
+    let offsets = HorizontalOffsets::new(paragraph);
+    let lines = laid_out.get_line_metrics();
 
-    let mut utf16_cursor = 0usize;
-    for span in paragraph.children() {
-        let span_text = span.apply_text_transform();
-        let span_range = next_horizontal_ruby_range(&offset_map, &mut utf16_cursor, &span_text);
+    for (span_index, span_range) in horizontal_ruby_targets(paragraph, &offsets) {
+        let span = &paragraph.children()[span_index];
         let ruby_text = span.ruby_text();
-        if ruby_text.is_empty() || span_range.is_empty() {
-            continue;
-        }
         let ruby_font_size = span.ruby_font_size();
         let families = span_font_families(span, &fallback_families);
-        let paint = merge_fills(&span.fills, bounds);
+        let paint = horizontal_ruby_paint(
+            laid_out,
+            &offsets.ranges[span_index],
+            merge_fills(&span.fills, bounds),
+        );
         let rects = laid_out.get_rects_for_range(
             span_range,
             skia::textlayout::RectHeightStyle::Tight,
@@ -907,22 +1120,19 @@ pub(crate) fn paint_horizontal_ruby(
                 .map(|(_, _, advance)| *advance)
                 .fold(0.0f32, f32::max)
                 .max(1.0);
-            // With overhang prohibited, squeeze the ruby to fit the base
-            // rect that SkParagraph has fixed.
-            let glyph_scale = if span.ruby_overhang == RubyOverhang::None {
-                (rect_box.rect.width() / (advance * count as f32)).min(1.0)
-            } else {
-                1.0
-            };
-            let layout_advance = advance * glyph_scale;
-            let lefts = distribute_ruby_tops(
-                rect_box.rect.left(),
-                rect_box.rect.width(),
-                count,
-                layout_advance,
-                span.ruby_align,
-                span.ruby_overhang,
+            // The base rect ends with the spacing after its last glyph; the
+            // spacing before it sits on the previous character.
+            let leading = spacing.leading_gaps[span_index];
+            let left = rect_box.rect.left() - leading;
+            let width = rect_box.rect.width() + leading;
+            let room = room_inside_line(
+                &lines,
+                rect_box.rect,
+                left,
+                width,
+                spacing.rooms[span_index],
             );
+            let lefts = distribute_ruby_tops(left, width, count, advance, span.ruby_align, room);
             for ((run_index, glyph, glyph_advance), left) in slice.iter().zip(lefts) {
                 let run = &shaped[*run_index];
                 let (_, metrics) = run.font.metrics();
@@ -947,20 +1157,40 @@ pub(crate) fn paint_horizontal_ruby(
                     }
                 };
                 if let Some(blob) = single_glyph_blob(&run.font, run.glyphs[*glyph]) {
-                    let gx = x + left + (layout_advance - glyph_advance * glyph_scale) / 2.0;
-                    if glyph_scale < 1.0 {
-                        canvas.save();
-                        canvas.translate((gx, baseline));
-                        canvas.scale((glyph_scale, 1.0));
-                        canvas.draw_text_blob(&blob, (0.0, 0.0), &paint);
-                        canvas.restore();
-                    } else {
-                        canvas.draw_text_blob(&blob, (gx, baseline), &paint);
-                    }
+                    let gx = x + left + (advance - glyph_advance) / 2.0;
+                    canvas.draw_text_blob(&blob, (gx, baseline), &paint);
                 }
             }
         }
     }
+}
+
+/// Overhang room of a horizontal ruby base, without the sides at its line's
+/// edges: ruby never sticks out past the first or last character.
+fn room_inside_line(
+    lines: &[skia::textlayout::LineMetrics],
+    rect: skia::Rect,
+    left: f32,
+    width: f32,
+    room: (f32, f32),
+) -> (f32, f32) {
+    let middle = rect.center_y();
+    let Some(line) = lines.iter().find(|line| {
+        let baseline = line.baseline as f32;
+        middle >= baseline - line.ascent as f32 && middle <= baseline + line.descent as f32
+    }) else {
+        return room;
+    };
+    let line_left = line.left as f32;
+    let line_right = line_left + line.width as f32;
+    (
+        if left <= line_left + 0.5 { 0.0 } else { room.0 },
+        if left + width >= line_right - 0.5 {
+            0.0
+        } else {
+            room.1
+        },
+    )
 }
 
 /// Block flow direction of a paragraph. Horizontal uses skparagraph;
@@ -1131,16 +1361,17 @@ mod tests {
 
     #[test]
     fn horizontal_ruby_ranges_use_utf16_across_spans() {
-        let offset_map = crate::shapes::kinsoku::OffsetMap::default();
-        let mut cursor = 0;
+        init_state();
+        let mut astral = make_span("𠀀", 0.0);
+        astral.ruby = "あ".to_string();
+        let mut kanji = make_span("漢", 0.0);
+        kanji.ruby = "かん".to_string();
+        let paragraph = make_paragraph(vec![astral, kanji], 0.0);
+        let offsets = HorizontalOffsets::new(&paragraph);
 
         assert_eq!(
-            next_horizontal_ruby_range(&offset_map, &mut cursor, "𠀀"),
-            0..2
-        );
-        assert_eq!(
-            next_horizontal_ruby_range(&offset_map, &mut cursor, "漢"),
-            2..3
+            horizontal_ruby_targets(&paragraph, &offsets),
+            vec![(0, 0..2), (1, 2..3)]
         );
     }
 
@@ -1218,21 +1449,39 @@ mod tests {
     }
 
     #[test]
-    fn layout_span_texts_skips_kinsoku_under_paragraph_letter_spacing() {
+    fn layout_span_texts_applies_kinsoku_under_paragraph_letter_spacing() {
         init_state();
         let paragraph = make_paragraph(vec![make_span("雪国。", 0.0)], 2.0);
-        let (texts, map) = paragraph.layout_span_texts();
-        assert_eq!(texts, vec!["雪国。".to_string()]);
-        assert!(map.is_empty());
+        let (texts, _) = paragraph.layout_span_texts();
+        assert_eq!(texts, vec!["雪国\u{2060}。".to_string()]);
     }
 
     #[test]
-    fn layout_span_texts_skips_kinsoku_under_span_letter_spacing() {
+    fn layout_span_texts_applies_kinsoku_under_span_letter_spacing() {
         init_state();
         let paragraph = make_paragraph(vec![make_span("雪国。", 1.5)], 0.0);
-        let (texts, map) = paragraph.layout_span_texts();
-        assert_eq!(texts, vec!["雪国。".to_string()]);
-        assert!(map.is_empty());
+        let (texts, _) = paragraph.layout_span_texts();
+        assert_eq!(texts, vec!["雪国\u{2060}。".to_string()]);
+    }
+
+    #[test]
+    fn inserted_joiners_take_no_letter_spacing() {
+        init_state();
+        let measure = |text: &str| {
+            let span = make_span(text, 5.0);
+            let mut style = skia::textlayout::TextStyle::default();
+            style.set_font_size(span.font_size);
+            style.set_letter_spacing(span.letter_spacing);
+            let mut fonts = skia::textlayout::FontCollection::new();
+            fonts.set_default_font_manager(skia::FontMgr::new(), None);
+            let mut builder = ParagraphBuilder::new(&ParagraphStyle::default(), &fonts);
+            builder.push_style(&style);
+            add_horizontal_span(&mut builder, &span, text, &[], &[], &style, &fonts);
+            let mut laid_out = builder.build();
+            laid_out.layout(f32::MAX);
+            laid_out.longest_line()
+        };
+        assert!((measure("A\u{2060}B") - measure("AB")).abs() < 0.01);
     }
 
     #[test]
@@ -1290,6 +1539,85 @@ mod tests {
             paragraph.layout_span_texts().0,
             vec!["a\u{2060}b".to_string()]
         );
+    }
+
+    fn test_ruby_spacing(paragraph: &Paragraph, texts: &[String]) -> HorizontalRubySpacing {
+        let provider = skia::textlayout::TypefaceFontProvider::new();
+        let typeface = FontMgr::new()
+            .new_from_data(include_bytes!("../fonts/sourcesanspro-regular.ttf"), None)
+            .expect("test font");
+        let mut provider = provider;
+        provider.register_typeface(typeface, Some("sourcesanspro"));
+        horizontal_ruby_spacing_with(paragraph, texts, &provider, &["sourcesanspro".to_string()])
+    }
+
+    #[test]
+    fn horizontal_ruby_overhang_room_covers_kana_neighbours_only() {
+        init_state();
+        let mut base = make_span("字", 0.0);
+        base.ruby = "じじじ".to_string();
+        let paragraph = make_paragraph(vec![make_span("か", 0.0), base, make_span("漢", 0.0)], 0.0);
+        let (texts, _) = paragraph.layout_span_texts();
+        let spacing = test_ruby_spacing(&paragraph, &texts);
+        assert_eq!(spacing.rooms[1], (8.0, 0.0));
+    }
+
+    #[test]
+    fn horizontal_long_ruby_spreads_its_base_without_overhang() {
+        init_state();
+        let mut base = make_span("i", 0.0);
+        base.ruby = "MMMMMMMM".to_string();
+        base.ruby_overhang = RubyOverhang::None;
+        let paragraph = make_paragraph(vec![make_span("a", 0.0), base, make_span("b", 0.0)], 0.0);
+        let (texts, _) = paragraph.layout_span_texts();
+        let spacing = test_ruby_spacing(&paragraph, &texts);
+        let gap = spacing.base_gaps[1];
+        assert!(gap > 0.0, "the base grows under a long reading");
+        assert_eq!(spacing.adjustments[1], vec![(0, gap / 2.0)]);
+        assert_eq!(spacing.adjustments[0], vec![(0, gap / 2.0)]);
+        assert_eq!(spacing.leading_gaps[1], gap / 2.0);
+    }
+
+    #[test]
+    fn horizontal_ruby_base_at_paragraph_start_takes_all_spacing_after() {
+        init_state();
+        let mut base = make_span("i", 0.0);
+        base.ruby = "MMMMMMMM".to_string();
+        base.ruby_overhang = RubyOverhang::None;
+        let paragraph = make_paragraph(vec![base, make_span("b", 0.0)], 0.0);
+        let (texts, _) = paragraph.layout_span_texts();
+        let spacing = test_ruby_spacing(&paragraph, &texts);
+        let gap = spacing.base_gaps[0];
+        assert!(gap > 0.0);
+        assert_eq!(
+            spacing.leading_gaps[0], 0.0,
+            "nothing sticks out before the line start"
+        );
+        assert_eq!(spacing.adjustments[0], vec![(0, gap / 2.0), (0, gap / 2.0)]);
+    }
+
+    #[test]
+    fn horizontal_short_ruby_adds_no_spacing() {
+        init_state();
+        let mut base = make_span("MMMM", 0.0);
+        base.ruby = "i".to_string();
+        let paragraph = make_paragraph(vec![base], 0.0);
+        let (texts, _) = paragraph.layout_span_texts();
+        let spacing = test_ruby_spacing(&paragraph, &texts);
+        assert_eq!(spacing.base_gaps, vec![0.0]);
+        assert!(spacing.adjustments[0].is_empty());
+    }
+
+    #[test]
+    fn annotation_room_follows_ruby_size_and_clearance() {
+        let mut span = make_span("漢字", 0.0);
+        span.ruby = "かんじ".to_string();
+        assert_eq!(span.annotation_room_em(), 0.0, "none keeps the line height");
+        span.annotation_clearance = AnnotationClearance::Auto;
+        span.ruby_size = RubySize::Quarter;
+        assert_eq!(span.annotation_room_em(), 0.25);
+        span.text_emphasis = TextEmphasis::FilledDot;
+        assert_eq!(span.annotation_room_em(), 0.75);
     }
 
     #[test]
@@ -1356,7 +1684,7 @@ mod tests {
         fonts.set_default_font_manager(skia::FontMgr::new(), None);
         let mut builder = ParagraphBuilder::new(&ParagraphStyle::default(), &fonts);
         builder.push_style(&style);
-        add_horizontal_span(&mut builder, &span, &span.text, &[], &style, &fonts);
+        add_horizontal_span(&mut builder, &span, &span.text, &[], &[], &style, &fonts);
         let mut laid_out = builder.build();
         laid_out.layout(200.0);
 
@@ -1386,7 +1714,7 @@ mod tests {
         fonts.set_default_font_manager(skia::FontMgr::new(), None);
         let mut builder = ParagraphBuilder::new(&ParagraphStyle::default(), &fonts);
         builder.push_style(&style);
-        add_horizontal_span(&mut builder, &span, &span.text, &[], &style, &fonts);
+        add_horizontal_span(&mut builder, &span, &span.text, &[], &[], &style, &fonts);
         builder.push_style(&style);
         builder.add_text(&following.text);
 
@@ -1442,8 +1770,22 @@ mod tests {
             make_paragraph(texts.iter().map(|text| make_span(text, 0.0)).collect(), 0.0);
         assert_eq!(
             horizontal_aki_sheds(&paragraph, &texts),
-            vec![vec![1, 4], vec![0]],
+            vec![vec![(1, 8.0), (4, 8.0)], vec![(0, 8.0)]],
             "。 before 」, 、 before 「 across spans, and 「 before 「"
+        );
+    }
+
+    #[test]
+    fn leading_aki_shed_uses_the_bracket_font_size() {
+        init_state();
+        let texts = vec!["「".to_string(), "「う".to_string()];
+        let mut large = make_span("「う", 0.0);
+        large.font_size = 32.0;
+        let paragraph = make_paragraph(vec![make_span("「", 0.0), large], 0.0);
+        assert_eq!(
+            horizontal_aki_sheds(&paragraph, &texts),
+            vec![vec![(0, 16.0)], vec![]],
+            "the 16px 「 gives up half of the next 32px bracket's em"
         );
     }
 
@@ -1455,7 +1797,7 @@ mod tests {
             let paragraph = make_paragraph(vec![make_span(text, 0.0)], 0.0);
             assert_eq!(
                 horizontal_aki_sheds(&paragraph, &texts),
-                vec![Vec::<usize>::new()],
+                vec![Vec::<(usize, f32)>::new()],
                 "no aki shed in {text:?}"
             );
         }
@@ -1466,14 +1808,17 @@ mod tests {
         init_state();
         let joined = vec!["。\u{2060}」".to_string()];
         let paragraph = make_paragraph(vec![make_span(&joined[0], 0.0)], 0.0);
-        assert_eq!(horizontal_aki_sheds(&paragraph, &joined), vec![vec![0]]);
+        assert_eq!(
+            horizontal_aki_sheds(&paragraph, &joined),
+            vec![vec![(0, 8.0)]]
+        );
 
         let mut palt = make_span("。」", 0.0);
         palt.font_features = FontFeatures::Palt;
         let paragraph = make_paragraph(vec![palt], 0.0);
         assert_eq!(
             horizontal_aki_sheds(&paragraph, &["。」".to_string()]),
-            vec![Vec::<usize>::new()]
+            vec![Vec::<(usize, f32)>::new()]
         );
     }
 
@@ -1501,6 +1846,82 @@ mod tests {
         assert!(
             (spaced - solid - 8.0).abs() < 0.01,
             "the period sheds half of its 16px em: {spaced} vs {solid}"
+        );
+    }
+
+    #[test]
+    fn horizontal_ruby_targets_use_builder_offsets() {
+        init_state();
+        let mut note = make_span("割注入り", 0.0);
+        note.warichu = true;
+        let mut base = make_span("漢字", 0.0);
+        base.ruby = "かんじ".to_string();
+        let paragraph = make_paragraph(vec![note, base], 0.0);
+        let offsets = HorizontalOffsets::new(&paragraph);
+        assert_eq!(
+            horizontal_ruby_targets(&paragraph, &offsets),
+            vec![(1, 3..6)],
+            "the warichu span takes three builder units; 漢\u{2060}字 carries a joiner"
+        );
+    }
+
+    #[test]
+    fn horizontal_ruby_paint_follows_the_pass_paint() {
+        init_state();
+        let mut base = make_span("漢字", 0.0);
+        base.ruby = "かんじ".to_string();
+        let paragraph = make_paragraph(vec![base.clone()], 0.0);
+        let mut stroke = skia::Paint::default();
+        stroke.set_style(skia::PaintStyle::Stroke);
+        stroke.set_color(skia::Color::RED);
+        let mut style = skia::textlayout::TextStyle::default();
+        style.set_font_size(base.font_size);
+        style.set_foreground_paint(&stroke);
+        let mut fonts = skia::textlayout::FontCollection::new();
+        fonts.set_default_font_manager(skia::FontMgr::new(), None);
+        let mut builder = ParagraphBuilder::new(&ParagraphStyle::default(), &fonts);
+        builder.push_style(&style);
+        add_horizontal_span(&mut builder, &base, &base.text, &[], &[], &style, &fonts);
+        let mut laid_out = builder.build();
+        laid_out.layout(400.0);
+
+        let offsets = HorizontalOffsets::new(&paragraph);
+        let paint = horizontal_ruby_paint(&laid_out, &offsets.ranges[0], skia::Paint::default());
+        assert_eq!(paint.style(), skia::PaintStyle::Stroke);
+        assert_eq!(paint.color(), skia::Color::RED);
+    }
+
+    #[test]
+    fn horizontal_position_data_skips_tab_placeholders_before_warichu() {
+        init_state();
+        let mut warichu = make_span("割注入り", 0.0);
+        warichu.warichu = true;
+        let mut content = super::super::text::TextContent::new(
+            crate::math::Rect::from_xywh(0.0, 0.0, 400.0, 100.0),
+            crate::shapes::GrowType::Fixed,
+        );
+        content.add_paragraph(make_paragraph(vec![make_span("A\tB", 0.0), warichu], 0.0));
+        let mut shape = crate::shapes::Shape::new(Uuid::nil());
+        shape.set_selrect(0.0, 0.0, 400.0, 100.0);
+        let mut resources =
+            crate::render::RenderResources::try_new_headless().expect("headless resources");
+        let _guard = crate::globals::TestRenderResourcesGuard::install(&mut resources);
+
+        let data = super::super::text::calculate_position_data(&shape, &content, false);
+
+        let text_right = data
+            .iter()
+            .filter(|entry| entry.span == 0)
+            .map(|entry| entry.x + entry.width)
+            .fold(0.0f32, f32::max);
+        let warichu_left = data
+            .iter()
+            .filter(|entry| entry.span == 1)
+            .map(|entry| entry.x)
+            .fold(f32::MAX, f32::min);
+        assert!(
+            warichu_left >= text_right - 0.5,
+            "the warichu strips start at {warichu_left}, inside A\tB which ends at {text_right}"
         );
     }
 
@@ -1577,7 +1998,7 @@ mod tests {
         let (texts, _) = paragraph.layout_span_texts();
         for (span, text) in paragraph.children().iter().zip(texts) {
             builder.push_style(&style);
-            add_horizontal_span(&mut builder, span, &text, &[], &style, &fonts);
+            add_horizontal_span(&mut builder, span, &text, &[], &[], &style, &fonts);
         }
         let mut laid_out = builder.build();
         laid_out.layout(200.0);
@@ -1610,7 +2031,7 @@ mod tests {
             let mut style = skia::textlayout::TextStyle::default();
             style.set_font_size(if index == 0 { 16.0 } else { 24.0 });
             builder.push_style(&style);
-            add_horizontal_span(&mut builder, span, &text, &[], &style, &fonts);
+            add_horizontal_span(&mut builder, span, &text, &[], &[], &style, &fonts);
         }
         let mut laid_out = builder.build();
         laid_out.layout(200.0);

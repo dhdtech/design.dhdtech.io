@@ -8,7 +8,9 @@
   (:require
 
    [app.common.types.shape :as cts]
+   [app.common.types.shape.text :as ctst]
    [app.common.types.text :as cttx]
+   [app.common.types.text.japanese-layout :as jl]
    [clojure.test :as t :include-macros true]))
 
 (def content-base
@@ -368,3 +370,52 @@
 
     (t/is (every? #(= % "14") original-font-sizes))
     (t/is (every? #(= % "32") updated-font-sizes))))
+
+(defn- with-span-attrs
+  [attrs]
+  (update-in content-base [:children 0 :children 0 :children 0] merge attrs))
+
+(defn- with-paragraph-attrs
+  [attrs]
+  (update-in content-base [:children 0 :children 0] merge attrs))
+
+(t/deftest japanese-span-attrs-accept-supported-values
+  (t/is (ctst/valid-content?
+         (with-span-attrs {:text-combine-upright "digits2"
+                           :text-emphasis "open-sesame"
+                           :ruby "かんじ"
+                           :ruby-hidden true
+                           :ruby-size "quarter"
+                           :ruby-align "space-between"
+                           :ruby-overhang "none"
+                           :ruby-side "under"
+                           :warichu "warichu"
+                           :font-features "vpal"
+                           :annotation-clearance "auto"
+                           :text-orientation "upright"})))
+  (t/is (ctst/valid-content?
+         (with-paragraph-attrs {:writing-mode "vertical-rl" :text-orientation "mixed"}))))
+
+(t/deftest japanese-attrs-reject-unknown-values
+  (doseq [attrs [{:text-combine-upright "digits5"}
+                 {:text-emphasis "dot"}
+                 {:ruby-hidden "yes"}
+                 {:ruby-size "full"}
+                 {:ruby-align "end"}
+                 {:ruby-overhang "always"}
+                 {:ruby-side "left"}
+                 {:warichu "yes"}
+                 {:font-features "kern"}
+                 {:annotation-clearance "max"}
+                 {:text-orientation "sideways"}]]
+    (t/is (not (ctst/valid-content? (with-span-attrs attrs))) (pr-str attrs)))
+  (t/is (not (ctst/valid-content? (with-paragraph-attrs {:writing-mode "vertical-lr"})))))
+
+(t/deftest digit-combine-segments-combine-short-digit-runs
+  (t/is (= [["平成" false] ["31" true] ["年" false]]
+           (jl/digit-combine-segments "平成31年" "digits2")))
+  (t/is (= [["第" false] ["１２３" true]]
+           (jl/digit-combine-segments "第１２３" "digits3")))
+  (t/is (= [["12345" false]] (jl/digit-combine-segments "12345" "digits")))
+  (t/is (= [["1" false]] (jl/digit-combine-segments "1" "digits")))
+  (t/is (nil? (jl/digit-combine-segments "31" "all"))))

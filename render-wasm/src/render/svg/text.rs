@@ -4,7 +4,7 @@ use skia_safe::Canvas;
 
 use crate::error::Result;
 use crate::render::text;
-use crate::shapes::{Fill, ImageFill, Shape, SolidColor, Stroke, StrokeKind, Type};
+use crate::shapes::{text_vertical, Fill, ImageFill, Shape, SolidColor, Stroke, StrokeKind, Type};
 use crate::uuid::Uuid;
 
 use super::document::SvgLayerCanvas;
@@ -326,6 +326,19 @@ fn paint_text_glyph_silhouette(canvas: &Canvas, shape: &Shape) -> Result<()> {
         return Ok(());
     };
     let text_content = text_content.new_bounds(shape.selrect());
+    // The vertical pass paints span fills; clips and luminance masks need an
+    // opaque black silhouette.
+    let mut silhouette = skia_safe::Paint::default();
+    silhouette.set_color(skia_safe::Color::BLACK);
+    silhouette.set_anti_alias(true);
+    if text_vertical::paint_text_vertical_with(
+        canvas,
+        &text_content,
+        shape.vertical_align(),
+        &silhouette,
+    ) {
+        return Ok(());
+    }
     let mut mask_builders = text_content.paragraph_builder_group_opaque();
     text::render_overlay_emoji(canvas, shape, &mut mask_builders, None, None, None, None)?;
     Ok(())
@@ -340,6 +353,18 @@ fn paint_text_stroke_opaque(canvas: &Canvas, shape: &Shape, stroke: &Stroke) -> 
         return Ok(());
     };
     let text_content = text_content.new_bounds(shape.selrect());
+    if text_content.is_vertical() {
+        let (stroke_paints, _) = text::get_text_stroke_paints(stroke, &shape.selrect(), false);
+        for paint in &stroke_paints {
+            text_vertical::paint_text_vertical_with(
+                canvas,
+                &text_content,
+                shape.vertical_align(),
+                paint,
+            );
+        }
+        return Ok(());
+    }
     let stroke_blur_outset = Stroke::max_bounds_width(shape.visible_strokes(), false);
     let (mut stroke_paragraphs, _) = text::stroke_paragraph_builder_group_from_text(
         &text_content,

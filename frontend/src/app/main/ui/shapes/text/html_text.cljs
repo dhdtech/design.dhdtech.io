@@ -14,6 +14,18 @@
    [app.util.text.writing-mode :as wm]
    [rumext.v2 :as mf]))
 
+(defn- text-children
+  "Text of a node, with each combined digit run of a `digits` tate-chu-yoko
+   in its own `all` span (class `tcy` for generated code)."
+  [text node]
+  (if-let [segments (jl/digit-combine-segments text (:text-combine-upright node))]
+    (into-array
+     (for [[index [run combine?]] (d/enumerate segments)]
+       (if combine?
+         (mf/html [:span.tcy {:key index :style sts/tcy-run-style} run])
+         run)))
+    text))
+
 (mf/defc render-text*
   [{:keys [node parent shape is-code]}]
   (let [text  (:text node)
@@ -25,12 +37,12 @@
     (if (some? ruby)
       [:ruby.ruby-node {:style (sts/generate-ruby-container-styles node)
                         :class (when is-code (dm/str class "-ruby"))}
-       [:span.text-node {:style style :class class} text]
+       [:span.text-node {:style style :class class} (text-children text node)]
        [:rt {:style (sts/generate-ruby-styles shape node)
              :class (when is-code (dm/str class "-rt"))}
         ruby]]
       [:span.text-node {:style style :class class}
-       (if (= text "") "\u00A0" text)])))
+       (if (= text "") "\u00A0" (text-children text node))])))
 
 (mf/defc render-root*
   [{:keys [node children shape is-code]}]

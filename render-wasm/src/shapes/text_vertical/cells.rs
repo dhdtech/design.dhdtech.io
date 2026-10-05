@@ -74,6 +74,31 @@ fn split_digit_runs(text: &str, max: usize) -> Vec<(String, usize, bool)> {
 }
 
 /// UTF-16 offset, within the shaped piece, of a UTF-8 offset in `segment`.
+/// A sideways segment split after each run of spaces, so every word is its
+/// own cell and a column may break between words. Upright segments stay
+/// whole.
+fn split_sideways_words(segment: Segment) -> Vec<Segment> {
+    if segment.upright {
+        return vec![segment];
+    }
+    let mut words: Vec<Segment> = Vec::new();
+    let mut utf16 = segment.utf16_start;
+    let mut previous_space = false;
+    for ch in segment.text.chars() {
+        match words.last_mut() {
+            Some(word) if !(previous_space && !ch.is_whitespace()) => word.text.push(ch),
+            _ => words.push(Segment {
+                text: ch.to_string(),
+                utf16_start: utf16,
+                upright: false,
+            }),
+        }
+        previous_space = ch.is_whitespace();
+        utf16 += ch.len_utf16();
+    }
+    words
+}
+
 fn segment_utf16(segment: &Segment, utf8: usize) -> usize {
     segment.utf16_start
         + segment.text[..utf8.min(segment.text.len())]
@@ -170,7 +195,10 @@ impl<'a> SpanCells<'a> {
                 continue;
             }
             let piece_base = self.start + piece_start;
-            for segment in segment_by_orientation(piece, self.span.text_orientation) {
+            let segments = segment_by_orientation(piece, self.span.text_orientation)
+                .into_iter()
+                .flat_map(split_sideways_words);
+            for segment in segments {
                 for mut run in self.shape(&segment.text, self.span.font_size, segment.upright) {
                     let run_index = runs.len();
                     if segment.upright {
@@ -1207,8 +1235,11 @@ mod tests {
         let without_space = layout_content(&make_content(&["ab"], 1000.0), 1000.0);
         let with_space = layout_content(&make_content(&["a b"], 1000.0), 1000.0);
         assert_eq!(without_space.cells.len(), 1);
-        assert_eq!(with_space.cells.len(), 1);
-        let added = with_space.cells[0].extent - without_space.cells[0].extent;
+        assert_eq!(with_space.cells.len(), 2, "one sideways cell per word");
+        let extent = |layout: &super::super::layout::VerticalLayout| {
+            layout.cells.iter().map(|c| c.extent).sum::<f32>()
+        };
+        let added = extent(&with_space) - extent(&without_space);
         assert!(
             (added - 20.0 * WESTERN_WORD_SPACING_EM).abs() < 0.01,
             "word space should add one third em, got {added}"
