@@ -7,4 +7,4 @@ Go to the team with this link:
 {{ public-uri }}/?screen=dashboard-members&team-id={{team-id}}
 
 Enjoy!
-The Penpot team.
+The DHDTech.io team.

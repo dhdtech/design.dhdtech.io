@@ -57,9 +57,9 @@
         </style>
         <![endif]-->
   <!--[if !mso]><!-->
-  <link href="https://fonts.googleapis.com/css?family=Source%20Sans%20Pro" rel="stylesheet" type="text/css">
+  <link href="https://fonts.googleapis.com/css?family=Space+Grotesk" rel="stylesheet" type="text/css">
   <style type="text/css">
-    @import url(https://fonts.googleapis.com/css?family=Source%20Sans%20Pro);
+    @import url(https://fonts.googleapis.com/css?family=Space+Grotesk);
   </style>
   <!--<![endif]-->
   <style type="text/css">
@@ -88,8 +88,8 @@
   </style>
 </head>
 
-<body style="background-color:#E5E5E5;">
-  <div style="background-color:#E5E5E5;">
+<body style="background-color:#0a0a0a;">
+  <div style="background-color:#0a0a0a;">
     <!--[if mso | IE]>
       <table
          align="center" border="0" cellpadding="0" cellspacing="0" class="" style="width:600px;" width="600"
@@ -156,9 +156,9 @@
         <tr>
           <td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;">
       <![endif]-->
-    <div style="background:#FFFFFF;background-color:#FFFFFF;margin:0px auto;max-width:600px;">
+    <div style="background:#101010;background-color:#101010;margin:0px auto;max-width:600px;">
       <table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation"
-        style="background:#FFFFFF;background-color:#FFFFFF;width:100%;">
+        style="background:#101010;background-color:#101010;width:100%;">
         <tbody>
           <tr>
             <td style="direction:ltr;font-size:0px;padding:20px 0;text-align:center;">
@@ -178,7 +178,7 @@
                   <tr>
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;">
                         Hi{% if user-name %} {{ user-name|abbreviate:25 }}{% endif %},
                       </div>
                     </td>
@@ -186,27 +186,27 @@
                   <tr>
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;">
                         Your Enterprise subscription is coming up for renewal. Here's a summary of what's included.
                       </div>
-                      <div style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;margin-top:20px">
+                      <div style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;margin-top:20px">
                         <b>Renewal date:</b> {{ renewal-date }}
                       </div>
-                      <div style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;margin-top:10px">
+                      <div style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;margin-top:10px">
                         <b>Estimated amount:</b> {{ estimated-amount }}
                       </div>
-                      <div style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;margin:10px 0">
+                      <div style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;margin:10px 0">
                         <b>Organizations covered:</b> {% if organizations|empty? %}No organizations yet.{% endif %}
                       </div>
 
                       {% for org in organizations %}
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;margin-bottom:5px">
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;margin-bottom:5px">
                         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="20" height="20" style="display:inline-block;vertical-align:middle;">
                           <tr>
                             <td width="20" height="20" align="center" valign="middle"
                                 background="{% if org.logo %}{{org.logo}}{% else %}{{org.avatar-bg-url}}{% endif %}"
-                                style="width:20px;height:20px;text-align:center;font-weight:bold;font-size:9px;line-height:20px;color:#ffffff;background-size:cover;background-position:center;background-repeat:no-repeat;border-radius: 50%;color:black">
+                                style="width:20px;height:20px;text-align:center;font-weight:bold;font-size:9px;line-height:20px;color:#101010;background-size:cover;background-position:center;background-repeat:no-repeat;border-radius:0;color:black">
                               {% if org.initials %}{{org.initials}}{% endif %}
                             </td>
                           </tr>
@@ -221,30 +221,30 @@
                   <tr>
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;">
                         This amount is based on current member counts across your organizations. You can adjust members from the <a href="{{ public-uri }}/admin-console/" target="_blank">Admin Console</a>.</div>
                     </td>
                   </tr>
                   <tr>
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
-                        Check our <a href="https://penpot.app/terms" target="_blank">Terms and Conditions</a> and <a href="https://penpot.app/privacy" target="_blank">Privacy Policy.</a></div>
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;">
+                        Check our <a href="https://dhdtech.io/terms" target="_blank">Terms and Conditions</a> and <a href="https://dhdtech.io/privacy" target="_blank">Privacy Policy.</a></div>
                     </td>
                   </tr>
 
                   <tr>
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;">
                         Enjoy!</div>
                     </td>
                   </tr>
                   <tr>
                     <td align="left" style="font-size:0px;padding:10px 25px;word-break:break-word;">
                       <div
-                        style="font-family:Source Sans Pro, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#000000;">
-                        The Penpot team.</div>
+                        style="font-family:'Space Grotesk', Helvetica, Arial, sans-serif;font-size:16px;line-height:150%;text-align:left;color:#e0e0e0;">
+                        The DHDTech.io team.</div>
                     </td>
                   </tr>
                 </table>

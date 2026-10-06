@@ -3,7 +3,7 @@ Hello!
 {{invited-by|abbreviate:25}} has invited you to join the team "{{ team|abbreviate:50 }}"{% if organization %}, part of the organization "{{ organization.name|abbreviate:50 }}"{% endif %}.
 
 {% if organization.sso-active %}
-"{{ organization.name|abbreviate:50 }}" has set up single sign-on (SSO) in Penpot. Access to its teams and files now goes
+"{{ organization.name|abbreviate:50 }}" has set up single sign-on (SSO) in DHDTech.io Design. Access to its teams and files now goes
 through your organization's identity provider.
 
 If you can't get in, your account probably isn't in the directory yet. To get access, contact the organization owner.
@@ -14,4 +14,4 @@ Accept invitation using this link:
 {{ public-uri }}/?screen=auth-verify-token&token={{token}}
 
 Enjoy!
-The Penpot team.
+The DHDTech.io team.

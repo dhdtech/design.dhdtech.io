@@ -10,4 +10,4 @@ Hello {{name|abbreviate:25}}!
 
 {{ comment-url }}
 
-The Penpot team.
+The DHDTech.io team.

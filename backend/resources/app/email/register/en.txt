@@ -1,6 +1,6 @@
 Hi {{name|abbreviate:25}},
 
-Welcome to Penpot!
+Welcome to DHDTech.io Design!
 
 Please verify your email to get started with your first design and collaboration.
 
@@ -8,4 +8,4 @@ Please verify your email to get started with your first design and collaboration
 
 Enjoy!
 
-The Penpot team
+The DHDTech.io team
