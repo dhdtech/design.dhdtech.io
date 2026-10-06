@@ -67,7 +67,9 @@
 
   Every step of the job becomes a message for the caller: the milestone
   under `:progress`, the artifact as `:uri` when the job completed, and
-  the public error of the job when it failed.
+  the public error of the job when it failed. A job cancelled elsewhere
+  (e.g. from the admin panel) answers as `:cancelled`, so the dialog
+  never hangs on a file whose job will never produce an artifact.
 
   `on-job` is an optional callback invoked with the id of the created
   job, so the caller can cancel it while it runs."
@@ -96,6 +98,9 @@
                                          (rx/of {:file-id (:id file)
                                                  :error   error})
 
+                                         ;; cancelled elsewhere (e.g. from
+                                         ;; the admin panel): no artifact
+                                         ;; is coming, mark the file
                                          (= "cancelled" status)
                                          (rx/of {:file-id   (:id file)
                                                  :cancelled true})

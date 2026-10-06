@@ -2912,7 +2912,7 @@ msgstr "Expired"
 msgid "labels.export"
 msgstr "Export"
 
-#: src/app/main/ui/exports/files.cljs:111
+#: src/app/main/ui/exports/files.cljs:112
 msgid "labels.export-cancelled"
 msgstr "Export cancelled"
 
@@ -2988,7 +2988,7 @@ msgstr "Hide resolved comments"
 msgid "labels.import"
 msgstr "Import"
 
-#: src/app/main/data/imports.cljs:259
+#: src/app/main/data/imports.cljs:263
 msgid "labels.import-cancelled"
 msgstr "Import cancelled"
 
