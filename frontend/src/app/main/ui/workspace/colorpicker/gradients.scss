@@ -62,7 +62,7 @@
 
 .gradient-preview-stop-decoration {
   background: var(--color-foreground-primary);
-  border-radius: 100%;
+  border-radius: 0;
   bottom: deprecated.$s-32;
   box-shadow: 0 0 deprecated.$s-4 0 var(--menu-shadow-color);
   height: deprecated.$s-4;
@@ -156,7 +156,7 @@
 
 .gradient-preview-stop-preview {
   background: var(--color-foreground-primary);
-  border-radius: 50%;
+  border-radius: 0;
   height: deprecated.$s-4;
   left: calc(var(--preview-position, 0%) - deprecated.$s-2);
   pointer-events: none;

@@ -64,7 +64,7 @@
 .owner-icon {
   inline-size: $sz-32;
   block-size: $sz-32;
-  border-radius: 50%;
+  border-radius: 0;
 }
 
 .user-icon,
@@ -100,7 +100,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  border-radius: 50%;
+  border-radius: 0;
   inline-size: $sz-120;
   block-size: $sz-120;
 }

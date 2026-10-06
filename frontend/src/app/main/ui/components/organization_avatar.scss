@@ -21,19 +21,19 @@
 .organization-avatar-xxxl {
   width: px2rem(30);
   height: px2rem(30);
-  border-radius: px2rem(6);
+  border-radius: 0;
 }
 
 .organization-avatar-xxl {
   width: var(--sp-xxl);
   height: var(--sp-xxl);
-  border-radius: px2rem(5);
+  border-radius: 0;
 }
 
 .organization-avatar-xl {
   width: px2rem(22);
   height: px2rem(22);
-  border-radius: var(--sp-xs);
+  border-radius: 0;
 }
 
 .organization-avatar-bg {

@@ -170,7 +170,7 @@
   opacity: 0.4;
   inline-size: $sz-12;
   block-size: $sz-12;
-  border-radius: px2rem(2);
+  border-radius: 0;
 
   .layer-row.hidden & {
     opacity: 0.1;

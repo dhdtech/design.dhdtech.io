@@ -341,7 +341,7 @@
 .error-dot {
   inline-size: px2rem(4);
   block-size: px2rem(4);
-  border-radius: 50%;
+  border-radius: 0;
   background-color: var(--color-foreground-error);
   margin-inline-start: var(--sp-xs);
   position: absolute;

@@ -25,7 +25,7 @@
   height: deprecated.$s-32;
   width: 100%;
   margin-bottom: deprecated.$s-4;
-  border-radius: deprecated.$s-8;
+  border-radius: 0;
 
   &:hover {
     background-color: var(--button-secondary-background-color-hover);
@@ -48,7 +48,7 @@
   height: deprecated.$s-32;
   width: 100%;
   margin-bottom: deprecated.$s-4;
-  border-radius: deprecated.$s-8;
+  border-radius: 0;
 }
 
 .section-button {

@@ -376,7 +376,7 @@
   display: flex;
   justify-content: space-between;
   border: $b-1 solid var(--color-background-quaternary);
-  border-radius: var(--sp-s);
+  border-radius: 0;
   padding: var(--sp-m);
   margin: var(--sp-m);
   color: var(--color-foreground-secondary);

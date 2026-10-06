@@ -68,7 +68,7 @@
     background-color: $thumb-color;
     background-clip: content-box;
     border: $border solid transparent;
-    border-radius: $radius;
+    border-radius: 0;
 
     &:hover {
       background-color: $thumb-hover-color;

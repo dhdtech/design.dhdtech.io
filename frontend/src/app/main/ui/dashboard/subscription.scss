@@ -13,7 +13,7 @@
 .cta-power-up {
   display: flex;
   border: $b-1 solid var(--color-background-quaternary);
-  border-radius: var(--sp-s);
+  border-radius: 0;
   flex-direction: column;
   margin: var(--sp-m);
   padding: var(--sp-m);
@@ -222,7 +222,7 @@
 
 .nitrate-banner {
   display: flex;
-  border-radius: var(--sp-s);
+  border-radius: 0;
   flex-direction: column;
   margin: var(--sp-m) var(--sp-m) 0;
   background: var(--color-accent-select);
@@ -255,7 +255,7 @@
 }
 
 .nitrate-current-plan {
-  border-radius: var(--sp-s);
+  border-radius: 0;
   margin-block: var(--sp-s) var(--sp-m);
   margin-inline: var(--sp-m);
   background: var(--color-background-tertiary);

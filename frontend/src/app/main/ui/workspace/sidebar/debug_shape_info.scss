@@ -29,7 +29,7 @@
   background: var(--color-background-quaternary);
   color: var(--color-foreground-primary);
   padding: deprecated.$s-8;
-  border-radius: deprecated.$s-8;
+  border-radius: 0;
   display: flex;
   gap: deprecated.$s-4;
 }

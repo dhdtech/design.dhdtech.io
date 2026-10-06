@@ -80,7 +80,7 @@
     &:focus {
       outline: none;
       border: $b-1 solid var(--input-border-color-focus);
-      border-radius: var(--sp-s);
+      border-radius: 0;
     }
   }
 
@@ -232,7 +232,7 @@
     gap: var(--sp-xs);
     block-size: $sz-32;
     inline-size: 100%;
-    border-radius: var(--sp-s);
+    border-radius: 0;
     border: $b-1 solid var(--input-border-color);
 
     @extend %select-wrapper;
@@ -352,7 +352,7 @@
   gap: var(--sp-s);
   min-block-size: $sz-32;
   block-size: fit-content;
-  border-radius: var(--sp-s);
+  border-radius: 0;
   padding: var(--sp-s);
   color: var(--input-foreground-color-rest);
   border: $b-1 solid transparent;
@@ -388,7 +388,7 @@
   grid-template-rows: auto auto 0;
   justify-items: center;
   gap: 0;
-  border-radius: var(--sp-s);
+  border-radius: 0;
   margin: 0;
   border: $b-1 solid var(--color-background-tertiary);
   cursor: pointer;

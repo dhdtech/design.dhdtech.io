@@ -125,7 +125,7 @@
   inline-size: $sz-6;
   block-size: $sz-6;
   outline: var(--sp-xxs) solid var(--color-background-primary);
-  border-radius: 50%;
+  border-radius: 0;
   background-color: var(--color-foreground-error);
   margin-inline-start: var(--sp-xs);
   position: absolute;

@@ -105,7 +105,7 @@
 .switch-thumb {
   inline-size: var(--switch-thumb-width);
   block-size: var(--switch-thumb-height);
-  border-radius: var(--switch-thumb-border-radius);
+  border-radius: 0;
   box-shadow: var(--switch-thumb-shadow);
   background-color: var(--switch-thumb-background-color);
 }

@@ -185,7 +185,7 @@
   block-size: var(--sp-m);
   inline-size: var(--sp-m);
   border: $b-1 solid var(--color-foreground-secondary);
-  border-radius: 50%;
+  border-radius: 0;
   background-color: transparent;
   flex-shrink: 0;
 

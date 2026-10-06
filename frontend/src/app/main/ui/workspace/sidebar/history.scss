@@ -36,7 +36,7 @@
   margin: deprecated.$s-4;
   padding: deprecated.$s-4 deprecated.$s-8;
   border: deprecated.$s-2 solid transparent;
-  border-radius: deprecated.$s-8;
+  border-radius: 0;
   background-color: var(--entry-background-color);
   cursor: pointer;
   transition: border 0.2s;

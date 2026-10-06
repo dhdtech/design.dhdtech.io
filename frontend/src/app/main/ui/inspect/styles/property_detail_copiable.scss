@@ -27,7 +27,7 @@
   min-block-size: var(--button-min-block-size);
   min-inline-size: var(--button-min-inline-size);
   padding: var(--sp-s);
-  border-radius: var(--button-border-radius);
+  border-radius: 0;
   border: $b-1 solid transparent;
   text-align: left;
 

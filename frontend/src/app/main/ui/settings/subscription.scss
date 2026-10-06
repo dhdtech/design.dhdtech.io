@@ -73,7 +73,7 @@
 
 .plan-card {
   border: $b-1 solid var(--color-background-quaternary);
-  border-radius: var(--sp-s);
+  border-radius: 0;
   margin-block-start: var(--sp-l);
   padding: var(--sp-l);
 }
@@ -104,7 +104,7 @@
 
   block-size: var(--sp-xl);
   inline-size: var(--sp-xl);
-  border-radius: 6px;
+  border-radius: 0;
   border: 1.75px solid var(--color-foreground-primary);
 }
 
@@ -138,7 +138,7 @@
 .plan-cancel {
   align-items: center;
   background-color: var(--color-background-secondary);
-  border-radius: var(--sp-xs);
+  border-radius: 0;
   display: flex;
   padding-inline: var(--sp-s);
 }
@@ -364,7 +364,7 @@
   @include t.use-typography("body-small");
 
   background-color: var(--color-background-tertiary);
-  border-radius: var(--sp-s);
+  border-radius: 0;
   margin-block-start: $sz-40;
   padding-block: var(--sp-s);
   padding-inline: var(--sp-m);
@@ -398,7 +398,7 @@
   @include t.use-typography("body-medium");
 
   background-color: var(--color-background-tertiary);
-  border-radius: var(--sp-s);
+  border-radius: 0;
   padding-block: var(--sp-s);
   padding-inline: var(--sp-m);
   margin-block: var(--sp-m) var(--sp-xxxl);

@@ -154,7 +154,7 @@
   height: deprecated.$s-32;
   background: var(--button-secondary-background-color-rest);
   padding: deprecated.$s-2;
-  border-radius: deprecated.$s-4;
+  border-radius: 0;
 }
 
 .plugin-description {
@@ -193,7 +193,7 @@
 .plugins-empty-logo {
   width: deprecated.$s-44;
   height: deprecated.$s-44;
-  border-radius: 50%;
+  border-radius: 0;
   display: flex;
   justify-content: center;
   align-items: center;

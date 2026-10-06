@@ -252,7 +252,7 @@ form.avatar-form {
   margin: $s-16 0;
 
   img {
-    border-radius: 50%;
+    border-radius: 0;
     flex-shrink: 0;
     height: 100%;
     margin-right: $s-16;
@@ -271,7 +271,7 @@ form.avatar-form {
     position: absolute;
     width: 100%;
     height: 100%;
-    border-radius: 50%;
+    border-radius: 0;
     font-size: $fs-24;
     color: var(--color-foreground-primary);
     line-height: 6;
@@ -291,7 +291,7 @@ form.avatar-form {
     height: $s-32;
     padding: 0;
     border: none;
-    border-radius: 50%;
+    border-radius: 0;
     background: var(--color-background-primary);
     color: var(--color-foreground-primary);
     cursor: pointer;
