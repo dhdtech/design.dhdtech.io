@@ -15,7 +15,7 @@
   .marker-text {
     fill: var(--app-white);
     font-size: calc(deprecated.$s-12 / var(--zoom));
-    font-family: "worksans", "vazirmatn", sans-serif;
+    font-family: "Space Grotesk", "vazirmatn", sans-serif;
   }
 }
 
@@ -39,7 +39,7 @@
   background: none;
   border: 0;
   color: var(--grid-editor-marker-text);
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: calc(deprecated.$fs-12 / var(--zoom));
   font-weight: 400;
   margin: 0;

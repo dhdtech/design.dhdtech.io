@@ -38,7 +38,7 @@
 }
 
 @mixin uppercase-title-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-11;
   font-weight: $fw500;
   line-height: 1.2;
@@ -46,28 +46,28 @@
 }
 
 @mixin big-title-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-24;
   font-weight: $fw400;
   line-height: 1.2;
 }
 
 @mixin med-title-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-20;
   font-weight: $fw400;
   line-height: 1.2;
 }
 
 @mixin small-title-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-14;
   font-weight: $fw400;
   line-height: 1.2;
 }
 
 @mixin headline-large-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-18;
   line-height: 1.2;
   text-transform: uppercase;
@@ -75,7 +75,7 @@
 }
 
 @mixin headline-medium-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-16;
   line-height: 1.4;
   text-transform: uppercase;
@@ -83,7 +83,7 @@
 }
 
 @mixin headline-small-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-12;
   line-height: 1.2;
   text-transform: uppercase;
@@ -91,28 +91,28 @@
 }
 
 @mixin body-large-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-16;
   line-height: 1.5;
   font-weight: $fw400;
 }
 
 @mixin body-medium-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-14;
   line-height: 1.4;
   font-weight: $fw400;
 }
 
 @mixin body-small-typography {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs-12;
   font-weight: $fw400;
   line-height: 1.4;
 }
 
 @mixin code-typography {
-  font-family: "robotomono", monospace;
+  font-family: "Martian Mono", monospace;
   font-size: $fs-12;
   font-weight: $fw400;
   line-height: 1.2;

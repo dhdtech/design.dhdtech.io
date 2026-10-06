@@ -68,6 +68,13 @@
   }
 }
 
+// The DHDTech wordmark in the illustration column — the mark is the artwork.
+.login-logo-mark {
+  inline-size: 100%;
+  aspect-ratio: 1512 / 500;
+  fill: var(--color-foreground-primary);
+}
+
 .auth-content {
   display: grid;
   grid-template-rows: 1fr auto;

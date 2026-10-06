@@ -306,7 +306,7 @@
      [:text {:x area-text-x
              :y area-text-y
              :style {:fill "var(--grid-editor-area-text)"
-                     :font-family "worksans"
+                     :font-family "Space Grotesk"
                      :font-weight 600
                      :font-size (/ 14 zoom)
                      :alignment-baseline "central"

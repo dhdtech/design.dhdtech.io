@@ -43,7 +43,7 @@
      [:text {:x area-text-x
              :y area-text-y
              :style {:fill "var(--color-accent-quaternary)"
-                     :font-family "worksans"
+                     :font-family "Space Grotesk"
                      :font-weight 600
                      :font-size 14
                      :alignment-baseline "central"

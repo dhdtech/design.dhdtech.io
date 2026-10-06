@@ -6,11 +6,11 @@
 
 @use "ds/_utils.scss" as *;
 
-// TODO: create actual tokens once we have them from design
-$br-4: px2rem(4);
-$br-6: px2rem(6);
-$br-8: px2rem(8);
-$br-12: px2rem(12);
-$br-circle: 50%;
+// DHDTech brutalism: radius 0 everywhere — sharp corners, visible borders.
+$br-4: 0;
+$br-6: 0;
+$br-8: 0;
+$br-12: 0;
+$br-circle: 0;
 $b-1: px2rem(1);
 $b-2: px2rem(2);

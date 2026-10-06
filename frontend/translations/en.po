@@ -51,7 +51,7 @@ msgstr "Login here."
 
 #: src/app/main/ui/auth/login.cljs:297
 msgid "auth.login-tagline"
-msgstr "Penpot is the free open-source design tool for Design and Code collaboration"
+msgstr "DHDTech.io is the free open-source design tool for Design and Code collaboration"
 
 #: src/app/main/ui/auth/login.cljs:254
 msgid "auth.login-with-github-submit"
@@ -176,7 +176,7 @@ msgstr "Publish"
 
 #: src/app/main/ui/viewer/share_link.cljs:304, src/app/main/ui/viewer/share_link.cljs:314
 msgid "common.share-link.all-users"
-msgstr "All Penpot users"
+msgstr "All DHDTech.io users"
 
 #: src/app/main/ui/viewer/share_link.cljs:198
 msgid "common.share-link.confirm-deletion-link-description"
@@ -253,7 +253,7 @@ msgstr "Team management"
 #: src/app/main/ui/dashboard/projects.cljs:89
 msgid "dasboard.team-hero.text"
 msgstr ""
-"Penpot is meant for teams. Invite members to work together on projects and "
+"DHDTech.io is meant for teams. Invite members to work together on projects and "
 "files"
 
 #: src/app/main/ui/dashboard/projects.cljs:87
@@ -334,7 +334,7 @@ msgstr "Check your network or instance configuration and try again."
 
 #: src/app/main/ui/dashboard/check_updates.cljs:226
 msgid "dashboard.check-updates.unable-message"
-msgstr "This installation could not reach the Penpot releases service."
+msgstr "This installation could not reach the DHDTech.io releases service."
 
 #: src/app/main/ui/dashboard/check_updates.cljs:215
 msgid "dashboard.check-updates.unable-title"
@@ -427,7 +427,7 @@ msgstr "Will be deleted %s"
 
 #: src/app/main/ui/dashboard/file_menu.cljs:329, src/app/main/ui/workspace/main_menu.cljs:737
 msgid "dashboard.download-binary-file"
-msgstr "Download Penpot file (.penpot)"
+msgstr "Download DHDTech.io file (.penpot)"
 
 #: src/app/main/ui/dashboard/file_menu.cljs:302, src/app/main/ui/dashboard/project_menu.cljs:94
 msgid "dashboard.duplicate"
@@ -519,7 +519,7 @@ msgstr "There was an error while restoring the project %s and its files."
 
 #: src/app/main/ui/dashboard/file_menu.cljs:279
 msgid "dashboard.export-binary-multi"
-msgstr "Download %s Penpot files (.penpot)"
+msgstr "Download %s DHDTech.io files (.penpot)"
 
 #: src/app/main/ui/workspace/main_menu.cljs:745
 msgid "dashboard.export-frames"
@@ -545,7 +545,7 @@ msgstr ""
 
 #: src/app/main/ui/exports/assets.cljs:183
 msgid "dashboard.export-shapes.how-to-link"
-msgstr "Info how to set exports at Penpot."
+msgstr "Info how to set exports at DHDTech.io."
 
 #: src/app/main/ui/exports/assets.cljs:178
 msgid "dashboard.export-shapes.no-elements"
@@ -615,8 +615,8 @@ msgstr ""
 #, markdown
 msgid "dashboard.fonts.hero-text2"
 msgstr ""
-"You should only upload fonts you own or have license to use in Penpot. Find "
-"out more in the Content rights section of [Penpot's Terms of Service](%s). "
+"You should only upload fonts you own or have license to use in DHDTech.io. Find "
+"out more in the Content rights section of [DHDTech.io's Terms of Service](%s). "
 "You also might want to read about [font "
 "licensing](https://www.typography.com/faq)."
 
@@ -645,7 +645,7 @@ msgstr "Last modified %s"
 
 #: src/app/main/ui/dashboard/import.cljs:995, src/app/main/ui/dashboard/project_menu.cljs:110
 msgid "dashboard.import"
-msgstr "Import Penpot files"
+msgstr "Import DHDTech.io files"
 
 #: src/app/main/ui/dashboard/import.cljs:343, src/app/worker/import.cljs:144, src/app/worker/import.cljs:147
 msgid "dashboard.import.analyze-error"
@@ -1137,11 +1137,11 @@ msgstr "Select theme"
 
 #: src/app/main/ui/settings/options.cljs:76
 msgid "dashboard.select-ui-theme.dark"
-msgstr "Penpot Dark (default)"
+msgstr "DHDTech.io Dark (default)"
 
 #: src/app/main/ui/settings/options.cljs:77
 msgid "dashboard.select-ui-theme.light"
-msgstr "Penpot Light"
+msgstr "DHDTech.io Light"
 
 #: src/app/main/ui/settings/options.cljs:78
 msgid "dashboard.select-ui-theme.system"
@@ -1403,7 +1403,7 @@ msgstr "Webhook created successfully."
 msgid "dashboard.webhooks.description"
 msgstr ""
 "Webhooks are a simple way to allow other websites and apps to be notified "
-"when certain events happen at Penpot. We’ll send a POST request to each of "
+"when certain events happen at DHDTech.io. We’ll send a POST request to each of "
 "the URLs you provide."
 
 #: src/app/main/ui/dashboard/team.cljs:1551
@@ -1511,7 +1511,7 @@ msgstr "Cannot add library: this would create a circular dependency"
 #: src/app/main/ui/settings/integrations.cljs:93, src/app/util/clipboard.cljs:248
 msgid "errors.clipboard-api-unavailable"
 msgstr ""
-"Clipboard API is unavailable. Serve Penpot over HTTPS to enable clipboard "
+"Clipboard API is unavailable. Serve DHDTech.io over HTTPS to enable clipboard "
 "access"
 
 #: src/app/main/data/workspace/clipboard.cljs:514
@@ -1535,7 +1535,7 @@ msgstr "Cannot reach the server. Check your connection and try again."
 #: src/app/main/errors.cljs:851
 msgid "errors.deprecated"
 msgstr ""
-"Sorry! This is an old file that uses a deprecated type of Penpot assets and "
+"Sorry! This is an old file that uses a deprecated type of DHDTech.io assets and "
 "you can't open it."
 
 #: src/app/main/errors.cljs:854
@@ -1544,7 +1544,7 @@ msgstr "so we can help you."
 
 #: src/app/main/errors.cljs:852
 msgid "errors.deprecated.contact.before"
-msgstr "Although Penpot no longer support this type of Assets, you can"
+msgstr "Although DHDTech.io no longer support this type of Assets, you can"
 
 #: src/app/main/errors.cljs:853
 msgid "errors.deprecated.contact.text"
@@ -2043,7 +2043,7 @@ msgstr ""
 
 #: src/app/main/ui/settings/feedback.cljs:150
 msgid "feedback.discourse-title"
-msgstr "Penpot community"
+msgstr "DHDTech.io community"
 
 #: src/app/main/ui/settings/feedback.cljs:144
 msgid "feedback.other-ways-contact"
@@ -2279,7 +2279,7 @@ msgstr "Select color space"
 
 #: src/app/main/ui/inspect/right_sidebar.cljs:235
 msgid "inspect.empty.help"
-msgstr "If you want to know more about design inspect visit Penpot's help center"
+msgstr "If you want to know more about design inspect visit DHDTech.io's help center"
 
 #: src/app/main/ui/inspect/right_sidebar.cljs:239
 msgid "inspect.empty.more"
@@ -2406,7 +2406,7 @@ msgid "integrations.access-tokens.personal.description"
 msgstr ""
 "Personal access tokens function like an alternative to our login/password "
 "authentication system and can be used to allow an application to access the "
-"internal Penpot API"
+"internal DHDTech.io API"
 
 #: src/app/main/ui/settings/integrations.cljs:68
 msgid "integrations.copy-to-clipboard"
@@ -2475,7 +2475,7 @@ msgstr "MCP key generated"
 #: src/app/main/ui/settings/integrations.cljs:193
 msgid "integrations.info.mcp-server"
 msgstr ""
-"The Penpot MCP Server enables MCP clients to interact directly with Penpot "
+"The DHDTech.io MCP Server enables MCP clients to interact directly with DHDTech.io "
 "design files."
 
 #: src/app/main/ui/settings/integrations.cljs:119
@@ -2489,7 +2489,7 @@ msgstr "The MCP key has no expiration date"
 #: src/app/main/ui/settings/integrations.cljs:498
 msgid "integrations.mcp-server.description"
 msgstr ""
-"The Penpot MCP Server enables MCP clients to interact directly with Penpot "
+"The DHDTech.io MCP Server enables MCP clients to interact directly with DHDTech.io "
 "design files."
 
 #: src/app/main/ui/settings/integrations.cljs:581
@@ -2500,7 +2500,7 @@ msgstr "How to configure MCP clients"
 msgid "integrations.mcp-server.mcp-keys.info"
 msgstr ""
 "This is the server url you'll need to configure your MCP client in order to "
-"connect it to the Penpot MCP server."
+"connect it to the DHDTech.io MCP server."
 
 #: src/app/main/ui/settings/integrations.cljs:548
 msgid "integrations.mcp-server.mcp-keys.regenerate"
@@ -2624,7 +2624,7 @@ msgstr "Shortcuts"
 
 #: src/app/main/ui/dashboard/sidebar.cljs:740
 msgid "labels.about-penpot"
-msgstr "About Penpot"
+msgstr "About DHDTech.io"
 
 #: src/app/main/data/common.cljs:92, src/app/main/data/team.cljs:193, src/app/main/data/team.cljs:650, src/app/main/ui/dashboard/import.cljs:671, src/app/main/ui/dashboard/import.cljs:677
 msgid "labels.accept"
@@ -2754,7 +2754,7 @@ msgstr "Continue"
 
 #: src/app/main/ui/viewer/login.cljs:88
 msgid "labels.continue-with-penpot"
-msgstr "You can continue with a Penpot account"
+msgstr "You can continue with a DHDTech.io account"
 
 #: src/app/main/ui/components/copy_button.cljs:41
 msgid "labels.copy"
@@ -3062,7 +3062,7 @@ msgstr "Check out our"
 
 #: src/app/main/ui/static.cljs:360
 msgid "labels.nitrate-not-configured.main-message"
-msgstr "Penpot can't start yet."
+msgstr "DHDTech.io can't start yet."
 
 #: src/app/main/ui/static.cljs:370
 msgid "labels.nitrate-not-configured.technical-guide"
@@ -3071,7 +3071,7 @@ msgstr "technical guide"
 #: src/app/main/ui/static.cljs:350
 msgid "labels.nitrate-unavailable.main-message"
 msgstr ""
-"Penpot is temporarily unavailable due to a system issue. Please try again "
+"DHDTech.io is temporarily unavailable due to a system issue. Please try again "
 "shortly."
 
 #: src/app/main/ui/dashboard/comments.cljs:120, src/app/main/ui/workspace/comments.cljs:164
@@ -3150,11 +3150,11 @@ msgstr "Pending"
 
 #: src/app/main/ui/dashboard/sidebar.cljs:536
 msgid "labels.penpot-changelog"
-msgstr "Penpot Changelog"
+msgstr "DHDTech.io Changelog"
 
 #: src/app/main/ui/dashboard/sidebar.cljs:442
 msgid "labels.penpot-hub"
-msgstr "Penpot hub"
+msgstr "DHDTech.io hub"
 
 #: src/app/main/ui/dashboard/sidebar.cljs:388
 msgid "labels.pinned-projects"
@@ -3535,7 +3535,7 @@ msgstr "Interactive Prototypes"
 
 #: src/app/main/ui/ds/product/loader.cljs:33
 msgid "loader.tips.07.message"
-msgstr "Penpot uses SVG and CSS for seamless development."
+msgstr "DHDTech.io uses SVG and CSS for seamless development."
 
 #: src/app/main/ui/ds/product/loader.cljs:32
 msgid "loader.tips.07.title"
@@ -3559,7 +3559,7 @@ msgstr "Dark & Light Mode"
 
 #: src/app/main/ui/ds/product/loader.cljs:39
 msgid "loader.tips.10.message"
-msgstr "Extend Penpot with community-built plugins for extra functionality."
+msgstr "Extend DHDTech.io with community-built plugins for extra functionality."
 
 #: src/app/main/ui/ds/product/loader.cljs:38
 msgid "loader.tips.10.title"
@@ -4369,7 +4369,7 @@ msgstr "404 error"
 #: src/app/main/ui/static.cljs:171
 msgid "not-found.login.free"
 msgstr ""
-"Penpot is the free and open-source design tool for collaboration between "
+"DHDTech.io is the free and open-source design tool for collaboration between "
 "Design and Code"
 
 #: src/app/main/ui/auth/recovery_request.cljs:112
@@ -4386,7 +4386,7 @@ msgstr "Sign up for free"
 
 #: src/app/main/ui/static.cljs:186
 msgid "not-found.login.start-using"
-msgstr "And start using Penpot in seconds!"
+msgstr "And start using DHDTech.io in seconds!"
 
 #: src/app/main/ui/static.cljs:74
 msgid "not-found.made-with-love"
@@ -4440,7 +4440,7 @@ msgstr "If the owner allows it, you're going to be invited to the team."
 
 #: src/app/main/ui/static.cljs:477, src/app/main/ui/static.cljs:490
 msgid "not-found.no-permission.penpot-file"
-msgstr "Penpot file"
+msgstr "DHDTech.io file"
 
 #: src/app/main/ui/static.cljs:277, src/app/main/ui/static.cljs:309
 msgid "not-found.no-permission.project"
@@ -4500,7 +4500,7 @@ msgstr "Send me product updates (new features, releases, fixes...)."
 
 #: src/app/main/ui/onboarding/team_choice.cljs:251
 msgid "onboarding-v2.welcome.title"
-msgstr "Welcome to Penpot!"
+msgstr "Welcome to DHDTech.io!"
 
 #: src/app/main/ui/onboarding/team_choice.cljs:242
 msgid "onboarding.choice.team-up.continue-without-a-team"
@@ -4566,12 +4566,12 @@ msgstr "Wireframing"
 
 #: src/app/main/ui/onboarding/questions.cljs:114
 msgid "onboarding.questions.step1.question1"
-msgstr "What will you be using Penpot for?"
+msgstr "What will you be using DHDTech.io for?"
 
 #: src/app/main/ui/onboarding/questions.cljs:110
 msgid "onboarding.questions.step1.subtitle"
 msgstr ""
-"Let us know a bit about you to help us make Penpot work for you. Your "
+"Let us know a bit about you to help us make DHDTech.io work for you. Your "
 "answers will help us prioritize new features and point you in the right "
 "direction to get started."
 
@@ -4638,7 +4638,7 @@ msgstr "Create a team"
 #: src/app/main/ui/onboarding/team_choice.cljs:54
 msgid "onboarding.team-modal.create-team-desc"
 msgstr ""
-"A team allows you to collaborate with other Penpot users working in the "
+"A team allows you to collaborate with other DHDTech.io users working in the "
 "same files and projects."
 
 #: src/app/main/ui/onboarding/team_choice.cljs:58
@@ -5192,7 +5192,7 @@ msgstr "Redo"
 #: src/app/main/ui/settings/shortcuts.cljs:479
 msgid "shortcuts.reload-hint"
 msgstr ""
-"After editing shortcuts, reload any other open Penpot tabs to apply the "
+"After editing shortcuts, reload any other open DHDTech.io tabs to apply the "
 "changes."
 
 #: src/app/main/data/workspace/shortcuts.cljs:195
@@ -5766,7 +5766,7 @@ msgstr ""
 
 #: src/app/main/ui/settings/subscription.cljs:714
 msgid "subscription.settings.member-since"
-msgstr "Penpot member since: %s"
+msgstr "DHDTech.io member since: %s"
 
 #: src/app/main/ui/settings/subscription.cljs:736, src/app/main/ui/settings/subscription.cljs:751, src/app/main/ui/settings/subscription.cljs:767, src/app/main/ui/settings/subscription.cljs:787
 msgid "subscription.settings.more-information"
@@ -5848,7 +5848,7 @@ msgstr "Enjoy your plan!"
 
 #: src/app/main/ui/settings/subscription.cljs:397
 msgid "subscription.settings.success.dialog.thanks"
-msgstr "Thank your for chosing the Penpot %s plan!"
+msgstr "Thank your for chosing the DHDTech.io %s plan!"
 
 #: src/app/main/ui/settings/subscription.cljs:394
 msgid "subscription.settings.success.dialog.title"
@@ -5907,79 +5907,79 @@ msgstr[1] "%s invitations selected"
 
 #: src/app/main/ui/dashboard/files.cljs:209
 msgid "title.dashboard.files"
-msgstr "%s - Penpot"
+msgstr "%s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/fonts.cljs:50
 msgid "title.dashboard.font-providers"
-msgstr "Font Providers - %s - Penpot"
+msgstr "Font Providers - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/fonts.cljs:49
 msgid "title.dashboard.fonts"
-msgstr "Fonts - %s - Penpot"
+msgstr "Fonts - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/projects.cljs:366
 msgid "title.dashboard.projects"
-msgstr "Projects - %s - Penpot"
+msgstr "Projects - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/search.cljs:49
 msgid "title.dashboard.search"
-msgstr "Search - %s - Penpot"
+msgstr "Search - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/libraries.cljs:60
 msgid "title.dashboard.shared-libraries"
-msgstr "Shared Libraries - %s - Penpot"
+msgstr "Shared Libraries - %s - DHDTech.io"
 
 #: src/app/main/ui/auth/verify_token.cljs:110, src/app/main/ui/auth.cljs:40
 msgid "title.default"
-msgstr "Penpot | Full-stack design"
+msgstr "DHDTech.io | Full-stack design"
 
 #: src/app/main/ui/settings/feedback.cljs:162
 msgid "title.settings.feedback"
-msgstr "Give feedback - Penpot"
+msgstr "Give feedback - DHDTech.io"
 
 #: src/app/main/ui/settings/integrations.cljs:646
 msgid "title.settings.integrations"
-msgstr "Integrations - Penpot"
+msgstr "Integrations - DHDTech.io"
 
 #: src/app/main/ui/settings/notifications.cljs:45
 msgid "title.settings.notifications"
-msgstr "Notifications - Penpot"
+msgstr "Notifications - DHDTech.io"
 
 #: src/app/main/ui/settings/options.cljs:123
 msgid "title.settings.options"
-msgstr "Settings - Penpot"
+msgstr "Settings - DHDTech.io"
 
 #: src/app/main/ui/settings/password.cljs:121
 msgid "title.settings.password"
-msgstr "Password - Penpot"
+msgstr "Password - DHDTech.io"
 
 #: src/app/main/ui/settings/profile.cljs:144
 msgid "title.settings.profile"
-msgstr "Profile - Penpot"
+msgstr "Profile - DHDTech.io"
 
 #: src/app/main/ui/dashboard/team.cljs:1255
 msgid "title.team-invitations"
-msgstr "Invitations - %s - Penpot"
+msgstr "Invitations - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/team.cljs:645
 msgid "title.team-members"
-msgstr "Members - %s - Penpot"
+msgstr "Members - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/team.cljs:1642
 msgid "title.team-settings"
-msgstr "Settings - %s - Penpot"
+msgstr "Settings - %s - DHDTech.io"
 
 #: src/app/main/ui/dashboard/team.cljs:1535
 msgid "title.team-webhooks"
-msgstr "Webhooks - %s - Penpot"
+msgstr "Webhooks - %s - DHDTech.io"
 
 #: src/app/main/ui/viewer.cljs:422
 msgid "title.viewer"
-msgstr "%s - View mode - Penpot"
+msgstr "%s - View mode - DHDTech.io"
 
 #: src/app/main/ui/workspace.cljs:240
 msgid "title.workspace"
-msgstr "%s - Penpot"
+msgstr "%s - DHDTech.io"
 
 #: src/app/main/ui/ds/controls/utilities/token_field.cljs:120, src/app/main/ui/workspace/sidebar/options/menus/token_typography_row.cljs:83, src/app/main/ui/workspace/sidebar/options/rows/color_row.cljs:172
 msgid "token-actions.detach-token"
@@ -6044,7 +6044,7 @@ msgstr "Troubleshooting guide"
 #: src/app/main/ui/workspace/webgl_unavailable_modal.cljs:62
 msgid "webgl.modals.webgl-unavailable.message"
 msgstr ""
-"WebGL is not available in your browser, which is required for Penpot to "
+"WebGL is not available in your browser, which is required for DHDTech.io to "
 "work. Please check your browser settings and/or close graphics-heavy tabs."
 
 #: src/app/main/ui/workspace/webgl_unavailable_modal.cljs:58
@@ -7086,7 +7086,7 @@ msgstr "Try using the following structure:"
 #: src/app/main/ui/workspace/sidebar/options/menus/variants_help_modal.cljs:54
 msgid "workspace.options.component.variants-help-modal.intro"
 msgstr ""
-"To keep changes when switching between variants, Penpot connects layers "
+"To keep changes when switching between variants, DHDTech.io connects layers "
 "that:"
 
 #: src/app/main/ui/workspace/sidebar/options/menus/variants_help_modal.cljs:91

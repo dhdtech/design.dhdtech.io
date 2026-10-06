@@ -23,7 +23,7 @@ body {
   color: var(--color-foreground-primary);
   display: flex;
   flex-direction: column;
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -68,7 +68,7 @@ a {
 }
 
 button {
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
 }
 
 p {
@@ -133,7 +133,7 @@ input[type="number"] {
 input,
 select {
   box-sizing: border-box;
-  font-family: "worksans", "vazirmatn", sans-serif;
+  font-family: "Space Grotesk", "vazirmatn", sans-serif;
   font-size: $fs14;
   margin-bottom: $size-4;
   appearance: none;

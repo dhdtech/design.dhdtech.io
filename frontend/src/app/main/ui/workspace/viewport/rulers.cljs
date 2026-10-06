@@ -27,7 +27,7 @@
 (def over-number-percent 0.75)
 
 (def font-size 12)
-(def font-family "worksans")
+(def font-family "Space Grotesk")
 (def font-color "var(--layer-row-foreground-color)")
 (def canvas-border-radius 12)
 
