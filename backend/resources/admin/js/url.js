@@ -34,7 +34,7 @@ export function writeQuery(patch) {
   history.replaceState({}, "", "?" + query.toString());
 }
 
-const LIST_SCREENS = ["users", "teams", "projects", "files", "error-reports"];
+const LIST_SCREENS = ["users", "teams", "projects", "files", "jobs", "error-reports"];
 
 // Wrap a target query with the current list URL, so the detail
 // page can send "Back to list" to the same filters. Any nested

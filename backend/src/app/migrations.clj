@@ -520,7 +520,10 @@
     :fn (mg/resource "app/migrations/sql/0156-add-storage-object-json-dedup-index.sql")}
 
    {:name "0157-add-created-at-cursor-indexes"
-    :fn (mg/resource "app/migrations/sql/0157-add-created-at-cursor-indexes.sql")}])
+    :fn (mg/resource "app/migrations/sql/0157-add-created-at-cursor-indexes.sql")}
+
+   {:name "0158-add-job-admin-list-index"
+    :fn (mg/resource "app/migrations/sql/0158-add-job-admin-list-index.sql")}])
 
 (defn apply-migrations!
   [pool name migrations]

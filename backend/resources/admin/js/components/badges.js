@@ -47,3 +47,35 @@ export function defaultCell(value) {
   badge.textContent = value;
   return badge;
 }
+
+const JOB_STATUS_BADGES = {
+  new: "admin-badge-status-demo",
+  scheduled: "admin-badge-status-demo",
+  retry: "admin-badge-status-demo",
+  running: "admin-badge-status-active",
+  completed: "admin-badge-status-inactive",
+  failed: "admin-badge-status-blocked",
+  cancelled: "admin-badge-status-deleted",
+  aborted: "admin-badge-status-deleted",
+};
+
+const JOB_KIND_BADGES = {
+  system: "admin-badge-source-legacy",
+  user: "admin-badge-source-logging",
+};
+
+// Badge for a job status or kind: fixed class maps, never the raw
+// value as a class. Unknown values fall back to a neutral badge.
+export function jobStatusCell(status) {
+  const badge = document.createElement("span");
+  badge.className = "admin-badge " + (JOB_STATUS_BADGES[status] || "admin-badge-status-inactive");
+  badge.textContent = status;
+  return badge;
+}
+
+export function jobKindCell(kind) {
+  const badge = document.createElement("span");
+  badge.className = "admin-badge " + (JOB_KIND_BADGES[kind] || "admin-badge-source-legacy");
+  badge.textContent = kind;
+  return badge;
+}

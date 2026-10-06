@@ -480,6 +480,7 @@
     (->> (sv/scan-ns
           'app.rpc.admin.errors
           'app.rpc.admin.file
+          'app.rpc.admin.job
           'app.rpc.admin.misc
           'app.rpc.admin.profile
           'app.rpc.admin.project
