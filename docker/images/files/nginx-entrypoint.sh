@@ -32,7 +32,9 @@ update_flags() {
   fi
 
   if [ -n "$PENPOT_PUBLIC_URI" ]; then
-      echo "var penpotPublicURI = \"$PENPOT_PUBLIC_URI\";" >> "$1";
+    echo "$(sed \
+      -e "s|^//var penpotPublicURI = .*;|var penpotPublicURI = window.location.origin;|g" \
+      "$1")" > "$1"
   fi
 }
 
