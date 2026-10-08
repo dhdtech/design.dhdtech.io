@@ -1,7 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DHD Tech logo"
-     width="880" height="880" viewBox="0 0 880 880">
-<g transform="translate(0.000000,880) scale(0.100000,-0.100000)" fill="#000000" stroke="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="DHDTech.io"><title>DHDTech.io</title><rect width="512" height="512" rx="112" ry="112" fill="#ffffff"/><g transform="translate(256.000 256.000) scale(0.714955) translate(-253.000 -256.000)"><title>DHDTech.io Design</title><g transform="translate(0 0) scale(1)"><g color="#0a0a0a" fill="#0a0a0a" transform="translate(24 4) scale(.46)"><g transform="translate(0.000000,880) scale(0.100000,-0.100000)" fill="currentColor" stroke="none">
 <path d="M5888 8121 c-114 -64 -178 -103 -184 -112 -3 -5 -13 -9 -23 -9 -10 0
 -30 -9 -44 -20 -14 -11 -32 -20 -40 -20 -8 0 -20 -7 -27 -15 -7 -8 -38 -29
 -69 -47 -31 -17 -58 -35 -61 -39 -3 -4 -21 -14 -40 -23 -19 -8 -42 -20 -50
@@ -144,4 +141,4 @@
 24 9 38 20 14 11 30 20 37 20 7 0 23 9 37 20 14 11 32 20 41 20 8 0 39 21 68
 46 l54 46 0 683 c0 376 -3 690 -6 699 -8 20 -18 19 -70 -5z"/>
 </g>
-</svg>
+</g><path fill="#0a0a0a" fill-rule="evenodd" d="M326 302H446A24 24 0 0 1 470 326L386 478L302 326A24 24 0 0 1 326 302Z M412 372A26 26 0 1 1 360 372A26 26 0 1 1 412 372Z M378 398H394V478H378Z"/></g></g></svg>
