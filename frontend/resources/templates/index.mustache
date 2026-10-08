@@ -15,6 +15,10 @@
     <meta name="twitter:description" content="DHDTech.io is the open-source design platform for teams that build digital products at scale.">
     <meta name="twitter:image" content="/images/penpot-link-preview.png">
     <meta name="theme-color" content="#0A0A0A">
+    <link rel="canonical" href="https://design.dhdtech.io/" />
+    <!-- The shell is a login wall with client-only content; the indexable page
+         is /welcome, so the app document itself must not rank. -->
+    <meta name="robots" content="noindex, follow" />
     <link id="theme" href="css/main.css?version={{& version_tag}}" rel="stylesheet" type="text/css" />
     <link href="css/ui.css?version={{& version_tag}}" rel="stylesheet" type="text/css" />
     {{#isDebug}}
@@ -45,6 +49,10 @@
     {{> ../public/images/sprites/symbol/icons.svg }}
     {{> ../public/images/sprites/symbol/cursors.svg }}
     {{> ../public/images/sprites/assets.svg }}
+    <noscript>
+      <p>DHDTech.io Design is a self-hosted instance of the open-source design
+      and prototyping platform Penpot. <a href="/welcome">Learn more about DHDTech.io Design</a>.</p>
+    </noscript>
     <div id="app"></div>
     <section id="modal"></section>
 

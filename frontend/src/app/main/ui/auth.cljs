@@ -15,7 +15,6 @@
    [app.main.ui.auth.recovery-request :refer [recovery-request-page*]]
    [app.main.ui.auth.register :refer [register-page* register-success-page* register-validate-page* terms-service-privacy-policy*]]
    [app.main.ui.ds.foundations.assets.raw-svg :refer [raw-svg*] :as raw-svg]
-   [app.main.ui.ds.foundations.typography.heading :refer [heading*]]
    [app.util.dom :as dom]
    [app.util.i18n :as i18n :refer [tr]]
    [rumext.v2 :as mf]))
@@ -46,7 +45,7 @@
     [:main {:class (stl/css-case
                     :auth-section true
                     :register is-register)}
-     [:> heading* {:level 1 :typography "title-large" :class (stl/css :logo-container)}
+     [:div {:class (stl/css :logo-container)}
       [:a {:href "/" :title "DHDTech.io" :class (stl/css :logo-btn)}
        [:> raw-svg* {:id raw-svg/penpot-logo
                      :class (stl/css :logo)}]]]

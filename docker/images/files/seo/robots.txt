@@ -1,0 +1,25 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+
+# AI answer engines and crawlers.
+# Allowed explicitly so the intent is declared here, not inherited from `*`.
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-User
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: CCBot
+User-agent: meta-externalagent
+Allow: /
+
+# No search value — blocked.
+User-agent: Bytespider
+Disallow: /
+
+Sitemap: https://design.dhdtech.io/sitemap.xml
+# llms.txt: https://design.dhdtech.io/llms.txt

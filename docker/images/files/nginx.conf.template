@@ -179,6 +179,49 @@ http {
 
         include /etc/nginx/overrides/server.d/*.conf;
 
+        # Public landing page and the SEO/GEO files. Real files under
+        # /var/www/app/ (shipped by Dockerfile.frontend), not the SPA shell:
+        # a crawler must read robots.txt as text/plain, and a path that is not
+        # a real file must 404 rather than fall back to index.html.
+        location = /welcome {
+            include /etc/nginx/nginx-security-headers.conf;
+            add_header Cache-Control "public, max-age=3600" always;
+            try_files /welcome/index.html =404;
+        }
+
+        # .txt is text/plain by extension (nginx-mime.types), so these need no
+        # type override — only the crawlable cache policy.
+        location = /robots.txt {
+            include /etc/nginx/nginx-security-headers.conf;
+            add_header Cache-Control "public, max-age=86400" always;
+        }
+
+        location = /llms.txt {
+            include /etc/nginx/nginx-security-headers.conf;
+            add_header Cache-Control "public, max-age=86400" always;
+        }
+
+        # .xml maps to text/xml by extension, but a sitemap must be
+        # application/xml — so the type map is overridden for this location.
+        location = /sitemap.xml {
+            include /etc/nginx/nginx-security-headers.conf;
+            add_header Cache-Control "public, max-age=86400" always;
+            types { application/xml xml; }
+        }
+
+        # The application shell exists only at the document root: Penpot routes
+        # by query string (frontend/src/app/main/ui/routes.cljs `on-navigate`
+        # rejects any path other than the public URI), so no path below / is an
+        # app URL and none of them may fall back to index.html.
+        location = / {
+            include /etc/nginx/nginx-security-headers.conf;
+            add_header Cache-Control "no-store, no-cache, max-age=0" always;
+            if ($penpot_link_preview_agent) {
+                rewrite ^/$ /link-preview last;
+            }
+            try_files /index.html =404;
+        }
+
         location / {
             include /etc/nginx/overrides/location.d/*.conf;
 
@@ -201,14 +244,13 @@ http {
                 return 301 " /404";
             }
 
-            if ($penpot_link_preview_agent) {
-                rewrite ^/$ /link-preview last;
-            }
-
             include /etc/nginx/nginx-security-headers.conf;
             add_header Cache-Control "no-store, no-cache, max-age=0" always;
-            try_files $uri /index.html$is_args$args /index.html =404;
 
+            # No SPA fallback: only the document root renders the shell (see
+            # `location = /` above), so any path below / that is not a real
+            # file is a 404 rather than a 200 serving index.html.
+            try_files $uri =404;
         }
     }
 

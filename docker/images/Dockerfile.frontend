@@ -22,6 +22,9 @@ RUN set -ex; \
 ARG BUNDLE_PATH="./bundle-frontend/"
 COPY $BUNDLE_PATH /var/www/app/
 COPY ./files/config.js /var/www/app/js/config.js
+# robots.txt / sitemap.xml / llms.txt / welcome/index.html — real files, not
+# the SPA shell, so a crawler reads them instead of index.html.
+COPY ./files/seo/ /var/www/app/
 COPY ./files/nginx.conf.template /tmp/nginx.conf.template
 COPY ./files/nginx-resolvers.conf.template /tmp/resolvers.conf.template
 COPY ./files/nginx-admin-console-locations.conf.template /tmp/nginx-admin-console-locations.conf.template

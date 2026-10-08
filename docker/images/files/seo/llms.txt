@@ -1,0 +1,16 @@
+# DHDTech.io Design
+
+> DHDTech.io Design is a free, self-hosted instance of Penpot — the open-source design and prototyping platform — hosted by DHDTech.io.
+
+## What this is
+
+- [Penpot](https://github.com/penpot/penpot): the open-source design and prototyping platform this instance runs; licensed MPL-2.0 and maintained by the Penpot community.
+- [Welcome page](https://design.dhdtech.io/welcome): what DHDTech.io Design is, who it is for, and what it costs.
+
+## Use it
+
+- [DHDTech.io Design](https://design.dhdtech.io/): create a free account and design or prototype in the browser.
+
+## Credits
+
+- [Penpot community](https://penpot.app): the project this instance is built on, and where its community gathers.

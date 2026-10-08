@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DHDTech.io Design — a free, self-hosted design and prototyping platform</title>
+    <meta
+      name="description"
+      content="DHDTech.io Design is a free, self-hosted instance of Penpot, the open-source design and prototyping platform. Design and prototype in the browser at no cost." />
+    <link rel="canonical" href="https://design.dhdtech.io/welcome" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="DHDTech.io Design" />
+    <meta property="og:description" content="A free, self-hosted instance of Penpot, the open-source design and prototyping platform." />
+    <meta property="og:url" content="https://design.dhdtech.io/welcome" />
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "DHDTech.io Design",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Web",
+        "url": "https://design.dhdtech.io/welcome",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "isBasedOn": "https://github.com/penpot/penpot"
+      }
+    </script>
+    <style>
+      @font-face {
+        font-family: "Space Grotesk";
+        font-style: normal;
+        font-weight: 300 700;
+        font-display: swap;
+        src: url("/fonts/space-grotesk-vf.woff2") format("woff2-variations"),
+          url("/fonts/space-grotesk-vf.woff2") format("woff2");
+      }
+      :root {
+        --void: #0a0a0a;
+        --surface: #101010;
+        --ink: #e0e0e0;
+        --muted: #9ca3af;
+        --faint: #828a97;
+        --line: rgba(255, 255, 255, 0.18);
+        --accent: #6366f1;
+        --accent-light: #818cf8;
+        --sans: "Space Grotesk", ui-sans-serif, system-ui, "Segoe UI", Helvetica,
+          Arial, sans-serif;
+        --mono: ui-monospace, "SFMono-Regular", Menlo, "Cascadia Mono", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: var(--void);
+        color: var(--ink);
+        font-family: var(--sans);
+        font-size: 17px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        max-width: 780px;
+        margin: 0 auto;
+        padding: clamp(28px, 6vw, 72px) 24px 96px;
+      }
+      .kicker {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: var(--faint);
+        margin: 0 0 20px;
+      }
+      h1 {
+        font-size: clamp(2.1rem, 6.4vw, 3.6rem);
+        font-weight: 700;
+        line-height: 0.94;
+        letter-spacing: -0.04em;
+        text-transform: uppercase;
+        margin: 0 0 22px;
+      }
+      .lead {
+        font-size: clamp(1.05rem, 2.6vw, 1.3rem);
+        color: var(--ink);
+        margin: 0 0 10px;
+      }
+      .rule {
+        border: 0;
+        border-top: 2px solid var(--line);
+        margin: 40px 0;
+      }
+      h2 {
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--faint);
+        margin: 0 0 14px;
+      }
+      p {
+        margin: 0 0 16px;
+      }
+      a {
+        color: var(--accent-light);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .cta {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 14px 22px;
+        background: var(--accent-dark);
+        color: #ffffff;
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        text-decoration: none;
+        border: 1px solid var(--accent-dark);
+        border-radius: 0;
+        box-shadow: 4px 4px 0 0 rgba(99, 102, 241, 0.35);
+        transition: box-shadow 0.12s ease-out;
+      }
+      /* Press feedback via the hard shadow; the fill stays accent-dark so the
+         white label keeps a 6.3:1 contrast (accent #6366f1 is only 4.47:1). */
+      .cta:hover,
+      .cta:focus {
+        box-shadow: 2px 2px 0 0 rgba(99, 102, 241, 0.35);
+        border-color: var(--accent-light);
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent-light);
+        outline-offset: 3px;
+        border-radius: 0;
+      }
+      footer {
+        margin-top: 48px;
+        border-top: 1px solid var(--line);
+        padding-top: 20px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="kicker">Self-hosted · Free · Open source</p>
+      <h1>DHDTech.io Design</h1>
+      <p class="lead">
+        A free, self-hosted instance of Penpot — the open-source design and
+        prototyping platform — hosted by DHDTech.io.
+      </p>
+
+      <hr class="rule" />
+
+      <section>
+        <h2>What it is</h2>
+        <p>
+          DHDTech.io Design runs in your browser. You open it, sign in, and
+          start designing: interfaces, screens, and interactive prototypes,
+          built on the free and open-source Penpot toolset.
+        </p>
+      </section>
+
+      <section>
+        <h2>Who it is for</h2>
+        <p>
+          Designers, product teams, and anyone who needs a design and
+          prototyping tool without a per-seat subscription. Open source is the
+          point: nothing here is locked to a vendor, and your work is yours.
+        </p>
+      </section>
+
+      <section>
+        <h2>Free, and self-hosted by DHDTech.io</h2>
+        <p>
+          This instance is hosted and paid for by DHDTech.io. There is no
+          charge to use it and no trial that expires — it is free software,
+          running on our servers.
+        </p>
+        <p><a class="cta" href="/">Open DHDTech.io Design</a></p>
+      </section>
+
+      <hr class="rule" />
+
+      <section>
+        <h2>Credit</h2>
+        <p>
+          DHDTech.io Design is built on
+          <a href="https://github.com/penpot/penpot" rel="noopener">Penpot</a>,
+          the open-source design and prototyping platform, licensed under
+          MPL-2.0. All credit for the platform goes to the
+          <a href="https://penpot.app" rel="noopener">Penpot community</a>.
+          This is an independent, self-hosted instance and is not affiliated
+          with or endorsed by Penpot.
+        </p>
+      </section>
+
+      <footer>
+        2026 · DHDTech.io Design · built on Penpot (MPL-2.0)
+      </footer>
+    </main>
+  </body>
+</html>
